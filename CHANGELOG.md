@@ -1,5 +1,20 @@
 # pnpm-audit-promote
 
+## [1.1.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.0.0...v1.1.0) (2026-05-01)
+
+
+### Features
+
+* implement safe version bumping for direct dependencies with major version handling ([#8](https://github.com/TheRoks/pnpm-audit-promote/issues/8)) ([d632396](https://github.com/TheRoks/pnpm-audit-promote/commit/d6323963717ee1136d47223b4a56a645cec5ef42))
+
+
+### Bug Fixes
+
+* implement workspace package directory resolution and update cleanup logic ([#7](https://github.com/TheRoks/pnpm-audit-promote/issues/7)) ([dc09960](https://github.com/TheRoks/pnpm-audit-promote/commit/dc09960d7e9805d1c82631d910ecf0eb3749903d))
+* preserve quoting style when updating catalog versions ([#9](https://github.com/TheRoks/pnpm-audit-promote/issues/9)) ([7bcfb9a](https://github.com/TheRoks/pnpm-audit-promote/commit/7bcfb9aba529f29e0dd469ef5df28e440d0e04eb))
+* remove version specification for pnpm/action-setup in CI and release workflows ([#4](https://github.com/TheRoks/pnpm-audit-promote/issues/4)) ([e15e419](https://github.com/TheRoks/pnpm-audit-promote/commit/e15e4196a3035ed1e5c5e046b765b22c9bcf4385))
+* rename NPM_TOKEN to NODE_AUTH_TOKEN in release workflow ([#5](https://github.com/TheRoks/pnpm-audit-promote/issues/5)) ([f0aa658](https://github.com/TheRoks/pnpm-audit-promote/commit/f0aa658d36defcc7e7d51e364d61d636e30c728d))
+
 ## 1.0.0
 
 Initial public release.

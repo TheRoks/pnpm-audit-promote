@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from './logger.js';
+import { PRUNED_DIR_NAMES } from './fsWalk.js';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -80,4 +81,98 @@ export class WorkspaceState {
     }
     return false;
   }
+}
+
+/** Extract the `packages:` list from pnpm-workspace.yaml text. */
+function extractYamlPackagesGlobs(yaml: string): string[] | null {
+  const blockMatch = /^packages:\s*\r?\n((?:[ \t]+-[ \t]+.*\r?\n?)*)/m.exec(yaml);
+  if (!blockMatch?.[1]) return null;
+  const globs: string[] = [];
+  for (const line of blockMatch[1].split(/\r?\n/)) {
+    const m = /^[ \t]+-[ \t]+['"]?(.+?)['"]?\s*$/.exec(line);
+    if (m?.[1]) globs.push(m[1].trim());
+  }
+  return globs.length > 0 ? globs : null;
+}
+
+/** Returns true when the normalized relative path matches the workspace glob. */
+function matchesWorkspaceGlob(relPath: string, pattern: string): boolean {
+  const regexStr = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '[^/]+')
+    .replace(/__GLOBSTAR__/g, '.+');
+  return new RegExp(`^${regexStr}$`).test(relPath);
+}
+
+/**
+ * Resolves the set of absolute directory paths for all workspace packages
+ * (matched by the `packages:` globs in `pnpm-workspace.yaml` or the
+ * `workspaces` field in the root `package.json`).
+ *
+ * The workspace root itself is always included.
+ *
+ * Returns `null` when no workspace-package globs are configured, meaning
+ * callers should treat every `package.json` in the tree as in-scope.
+ */
+export function resolveWorkspacePackageDirs(state: WorkspaceState): Set<string> | null {
+  let patterns: string[] | null = null;
+
+  // 1. pnpm-workspace.yaml packages:
+  try {
+    patterns = extractYamlPackagesGlobs(state.readWorkspaceYaml());
+  } catch {
+    // ignore
+  }
+
+  // 2. Root package.json "workspaces" (fallback)
+  if (!patterns) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(state.rootPackageJson, 'utf8')) as {
+        workspaces?: unknown;
+      };
+      if (Array.isArray(pkg.workspaces)) {
+        const ws = (pkg.workspaces as unknown[]).filter((x): x is string => typeof x === 'string');
+        if (ws.length > 0) patterns = ws;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!patterns || patterns.length === 0) return null;
+
+  const positiveGlobs = patterns.filter((p) => !p.startsWith('!'));
+  const negativeGlobs = patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1));
+
+  if (positiveGlobs.length === 0) return null;
+
+  const result = new Set<string>();
+  result.add(state.workspaceRoot); // root package.json is always in scope
+
+  const queue = [state.workspaceRoot];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (PRUNED_DIR_NAMES.has(e.name)) continue;
+      const full = path.join(current, e.name);
+      const rel = path.relative(state.workspaceRoot, full).split(path.sep).join('/');
+      const matched =
+        positiveGlobs.some((g) => matchesWorkspaceGlob(rel, g)) &&
+        !negativeGlobs.some((g) => matchesWorkspaceGlob(rel, g));
+      if (matched) {
+        result.add(full);
+      }
+      queue.push(full);
+    }
+  }
+
+  return result;
 }

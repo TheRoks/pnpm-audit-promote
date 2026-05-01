@@ -241,4 +241,58 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).toContain("react: '18.2.0'"); // unchanged
     expect(warnings.some((w) => /--no-allow-major/.test(w) || /--allow-major/.test(w))).toBe(true);
   });
+
+  it('does not strip pnpm.overrides from package.json excluded by workspace config', async () => {
+    // packages: only includes storybook/*, explicitly excludes examples/*
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      ['packages:', '  - "packages/@repo/*"', '  - "storybook/*"', '  - "!examples/*"', ''].join(
+        '\n',
+      ),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', private: true }, null, 2),
+      'utf8',
+    );
+
+    // Included workspace package — overrides SHOULD be stripped
+    const includedDir = path.join(tmp, 'storybook', 'app');
+    fs.mkdirSync(includedDir, { recursive: true });
+    const includedPj = JSON.stringify(
+      { name: 'storybook-app', pnpm: { overrides: { lodash: '^4.17.21' } } },
+      null,
+      2,
+    );
+    fs.writeFileSync(path.join(includedDir, 'package.json'), includedPj, 'utf8');
+
+    // Excluded package — overrides should NOT be stripped
+    const excludedDir = path.join(tmp, 'examples', 'ng16');
+    fs.mkdirSync(excludedDir, { recursive: true });
+    const excludedPj = JSON.stringify(
+      { name: 'example-ng16', pnpm: { overrides: { lodash: '^4.17.21' } } },
+      null,
+      2,
+    );
+    fs.writeFileSync(path.join(excludedDir, 'package.json'), excludedPj, 'utf8');
+
+    const { runner } = makeRecordingRunner();
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    // Included package should have overrides stripped
+    const includedResult = fs.readFileSync(path.join(includedDir, 'package.json'), 'utf8');
+    expect(includedResult).not.toContain('"overrides"');
+
+    // Excluded package must be left untouched
+    const excludedResult = fs.readFileSync(path.join(excludedDir, 'package.json'), 'utf8');
+    expect(excludedResult).toContain('"overrides"');
+  });
 });

@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Prerequisites
 
-- Node.js >= 20.19
+- Node.js >= 22
 - pnpm >= 10
 
 ## Setup

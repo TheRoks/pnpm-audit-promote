@@ -12,15 +12,15 @@
     "security"
   ],
   "license": "MIT",
-  "author": "theroks",
+  "author": "TheRoks",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/theroks/pnpm-audit-promote.git"
+    "url": "git+https://github.com/TheRoks/pnpm-audit-promote.git"
   },
   "bugs": {
-    "url": "https://github.com/theroks/pnpm-audit-promote/issues"
+    "url": "https://github.com/TheRoks/pnpm-audit-promote/issues"
   },
-  "homepage": "https://github.com/theroks/pnpm-audit-promote#readme",
+  "homepage": "https://github.com/TheRoks/pnpm-audit-promote#readme",
   "type": "module",
   "bin": {
     "pnpm-audit-promote": "dist/cli.js"

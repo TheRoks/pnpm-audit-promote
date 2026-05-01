@@ -30,6 +30,32 @@ export function getCatalogNames(yaml: string): Set<string> {
   return names;
 }
 
+/**
+ * Map of catalog package name -> concrete version string, parsed from the
+ * given workspace yaml. Entries whose value is not a concrete version
+ * (e.g. `$ref` aliases) are omitted.
+ */
+export function getCatalogVersions(yaml: string): Map<string, string> {
+  const versions = new Map<string, string>();
+  const cm = CATALOG_BLOCK_PATTERN.exec(yaml);
+  if (!cm) return versions;
+
+  const body = cm[2] ?? '';
+  const entryPattern =
+    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s*$/;
+  for (const line of body.split(/\r?\n/)) {
+    const m = entryPattern.exec(line);
+    if (!m) continue;
+    const name = m[1] ?? m[2] ?? m[3];
+    const raw = m[4] ?? m[5] ?? m[6] ?? '';
+    if (!name) continue;
+    if (raw.startsWith('$')) continue;
+    const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(raw)?.[1];
+    if (concrete) versions.set(name, concrete);
+  }
+  return versions;
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -102,3 +102,34 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     expect(out).toBe(yaml);
   });
 });
+
+describe('cross-major warning', () => {
+  it('warns when promoting an override that crosses a major boundary', () => {
+    const yaml = "catalog:\n  react: '17.0.2'\n\noverrides:\n  react: '18.3.1'\n";
+    const state = writeWorkspace(yaml);
+    const warnings: string[] = [];
+    const logger = {
+      ...silentLogger,
+      warn(msg: string) {
+        warnings.push(msg);
+      },
+    };
+    const out = syncAuditOverridesIntoCatalog(state, logger);
+    expect(out).toContain("react: '18.3.1'");
+    expect(warnings.some((w) => /Major bump promoted for react/.test(w))).toBe(true);
+  });
+
+  it('does not warn when promoted version stays within the same major', () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n\noverrides:\n  react: '18.3.1'\n";
+    const state = writeWorkspace(yaml);
+    const warnings: string[] = [];
+    const logger = {
+      ...silentLogger,
+      warn(msg: string) {
+        warnings.push(msg);
+      },
+    };
+    syncAuditOverridesIntoCatalog(state, logger);
+    expect(warnings).toEqual([]);
+  });
+});

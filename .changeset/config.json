@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "theroks/pnpm-audit-promote" }],
+  "changelog": ["@changesets/changelog-github", { "repo": "TheRoks/pnpm-audit-promote" }],
   "commit": false,
   "fixed": [],
   "linked": [],

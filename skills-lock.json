@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-supply-chain": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/agent-supply-chain/SKILL.md",
+      "computedHash": "af309696b57bb67cffc07d23fc44f052ca2f9d7fdea8af2e30e06f3ad5dc2c6f"
+    },
+    "audit-integrity": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/audit-integrity/SKILL.md",
+      "computedHash": "89893ec8a16cdb5240d8845ffd3cbba7a26338a90bc108285c7343fd49615831"
+    },
+    "codeql": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/codeql/SKILL.md",
+      "computedHash": "a7d80450799b2141ddff9ec614477e237c1f50acb9eeade2dd869aeac3d004a9"
+    },
+    "conventional-commit": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/conventional-commit/SKILL.md",
+      "computedHash": "f29c9486cede6c7b2df0cfb0a2e4aa67446552b991bcf17d1b309e903171f03d"
+    },
+    "dependabot": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/dependabot/SKILL.md",
+      "computedHash": "9f63e2294479161689e07603a4cf76727be3b6e1a63f4e04c0a01e34133bfd2a"
+    },
+    "github-release": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/github-release/SKILL.md",
+      "computedHash": "c9804c5fb18cd776865a2f561488b1842aa4c350e6b95d14cd8c08320f54a6a4"
+    },
+    "sandbox-npm-install": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/sandbox-npm-install/SKILL.md",
+      "computedHash": "974fd633d6421af0f563b5afe6b144b4d3615ec528ebb620ae3091dda4546dcd"
+    },
+    "secret-scanning": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/secret-scanning/SKILL.md",
+      "computedHash": "cc7de79bee80775578227a370637d0a83aa0f2cbec28374058899859261d2081"
+    },
+    "security-review": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/security-review/SKILL.md",
+      "computedHash": "9b1791054c648b84ca424fc1342dede2e04759dc73436bb91d21675d5a4c13ea"
+    }
+  }
+}

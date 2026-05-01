@@ -31,12 +31,10 @@ pnpm run gen:version  # generates src/version.ts
 ## Pull requests
 
 1. Fork and create a topic branch.
-2. Add a changeset for any user-visible change: `pnpm changeset`.
-3. Ensure CI passes locally (`pnpm lint && pnpm typecheck && pnpm test && pnpm build`).
-4. Open a PR. Describe the change and link any relevant issue.
+2. Ensure CI passes locally (`pnpm lint && pnpm typecheck && pnpm test && pnpm build`).
+3. Open a PR. Describe the change and link any relevant issue.
 
 ## Releasing
 
-Releases are automated via [Changesets](https://github.com/changesets/changesets). Merging
-the auto-generated "Version Packages" PR triggers `pnpm publish` with npm provenance via
-GitHub Actions OIDC. Maintainers must configure the `NPM_TOKEN` secret.
+Releases trigger `pnpm publish` with npm provenance via GitHub Actions OIDC.
+Maintainers must configure the `NPM_TOKEN` secret.

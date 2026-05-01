@@ -43,7 +43,26 @@ describe('applyCatalogUpdates', () => {
 
   it('updates scoped package names', () => {
     const out = applyCatalogUpdates(SAMPLE_LF, new Map([['@scope/pkg', '2.0.0']]));
-    expect(out).toContain("'@scope/pkg': '2.0.0'");
+    expect(out).toContain(`'@scope/pkg': "2.0.0"`);
+  });
+
+  it('preserves single-quoted value style', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['react', '18.3.1']]));
+    expect(out).toContain(`react: '18.3.1'`);
+    expect(out).not.toContain(`react: "18.3.1"`);
+  });
+
+  it('preserves double-quoted value style', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['@scope/pkg', '1.2.3']]));
+    expect(out).toContain(`'@scope/pkg': "1.2.3"`);
+    expect(out).not.toContain(`'@scope/pkg': '1.2.3'`);
+  });
+
+  it('preserves unquoted value style', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['lodash', '4.17.22']]));
+    expect(out).toContain('lodash: 4.17.22');
+    expect(out).not.toContain(`lodash: '4.17.22'`);
+    expect(out).not.toContain(`lodash: "4.17.22"`);
   });
 
   it('returns input unchanged when updates is empty', () => {

@@ -77,10 +77,19 @@ export function applyCatalogUpdates(yaml: string, updates: ReadonlyMap<string, s
   for (const [name, version] of updates) {
     const escaped = escapeRegex(name);
     const entry = new RegExp(
-      `^(\\s+(?:'${escaped}'|"${escaped}"|${escaped})\\s*:\\s*)(?:'[^']*'|"[^"]*"|\\S+)([ \\t]*)$`,
+      `^(\\s+(?:'${escaped}'|"${escaped}"|${escaped})\\s*:\\s*)(?:'([^']*)'|"([^"]*)"|(\\S+))([ \\t]*)$`,
       'gm',
     );
-    catalogBody = catalogBody.replace(entry, `$1'${version}'$2`);
+    catalogBody = catalogBody.replace(
+      entry,
+      (_match, prefix: string, sq?: string, dq?: string, _bare?: string, trail?: string) => {
+        let wrapped: string;
+        if (sq !== undefined) wrapped = `'${version}'`;
+        else if (dq !== undefined) wrapped = `"${version}"`;
+        else wrapped = version;
+        return `${prefix}${wrapped}${trail ?? ''}`;
+      },
+    );
   }
 
   const eolMatch = /\r?\n/.exec(yaml);

@@ -159,6 +159,53 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).toContain("react: '18.2.1'");
   });
 
+  it('bumps catalog entries for packages that are deps of child workspace packages (not root)', async () => {
+    // Regression: the old `isDirect` check required the audit finding path to
+    // start with `.`, so packages like `vite` that appeared as
+    // `apps/web > vite` were skipped, and pnpm audit --fix would then write
+    // a broad range override that resolved to the latest (major) version.
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'vite',
+          patched_versions: '>=6.4.2',
+          // path starts with a child workspace package, NOT `.`
+          findings: [{ paths: ['apps__web>vite'] }],
+        },
+      },
+    });
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view vite versions --json': JSON.stringify([
+        '6.3.5',
+        '6.4.0',
+        '6.4.1',
+        '6.4.2',
+        '7.0.0',
+        '7.3.2',
+      ]),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    // Should pick the smallest patched version in the same major (minor bump),
+    // NOT the latest available (7.3.2).
+    expect(final).toContain("vite: '6.4.2'");
+    expect(final).not.toContain('7.');
+  });
+
   it('warns and bumps to major when only a major satisfies', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');

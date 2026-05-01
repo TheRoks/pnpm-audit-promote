@@ -8,4 +8,5 @@ export {
   type PnpmRunner,
   type PnpmOptions,
 } from './pnpm.js';
-export { PKG_VERSION } from './version.js';
+import pkg from '../package.json' with { type: 'json' };
+export const PKG_VERSION: string = pkg.version;

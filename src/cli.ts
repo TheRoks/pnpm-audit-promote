@@ -4,7 +4,9 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 import { refreshDeps } from './refresh.js';
 import { createLogger, type LogLevel } from './logger.js';
-import { PKG_VERSION } from './version.js';
+import pkg from '../package.json' with { type: 'json' };
+
+const { version: PKG_VERSION } = pkg;
 
 interface CliOptions {
   path: string;

@@ -54,9 +54,12 @@ export interface DirectDepBumpResult {
 }
 
 /**
- * Compute catalog version bumps for direct-dependency vulnerabilities found
- * by `pnpm audit --json`. Picks the smallest non-vulnerable version that is
- * `>= the current catalog version`, preferring patch over minor over major.
+ * Compute catalog version bumps for vulnerabilities found by `pnpm audit
+ * --json`. Picks the smallest non-vulnerable version that is `>= the current
+ * catalog version`, preferring patch over minor over major. Processes every
+ * package listed in the pnpm catalog — including those that are direct deps
+ * of child workspace packages rather than the root — because a catalog entry
+ * controls the resolved version for all workspace consumers.
  * Major bumps are explicitly logged via `logger.warn` because they can
  * introduce breaking changes.
  */
@@ -88,21 +91,6 @@ export async function getDirectDepCatalogBumps(
   for (const adv of Object.values(audit.advisories)) {
     const module = adv.module_name ?? '';
     if (!catalogNames.has(module)) continue;
-
-    let isDirect = false;
-    for (const f of adv.findings ?? []) {
-      for (const p of f.paths ?? []) {
-        const segs = p.split('>').map((s) => s.trim());
-        if (segs.length < 1) continue;
-        const first = segs[0] === '.' && segs.length >= 2 ? segs[1] : segs[0];
-        if (first === module) {
-          isDirect = true;
-          break;
-        }
-      }
-      if (isDirect) break;
-    }
-    if (!isDirect) continue;
 
     const patchedRange = adv.patched_versions ?? '';
     const current = catalogVersions.get(module);
@@ -208,10 +196,11 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
 
   const overridesBody = om[2] ?? '';
   const catalogNames = getCatalogNames(current);
+  const catalogVersions = getCatalogVersions(current);
   const remaining: string[] = [];
   const updates = new Map<string, string>();
   const entryPattern =
-    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s*$/;
+    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
 
   for (const line of overridesBody.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -222,6 +211,42 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
       if (isPlainPackageName(key) && catalogNames.has(key)) {
         updates.set(key, val);
         continue;
+      }
+      // Qualified override (e.g. `vite@<=6.4.1: '>=6.4.2'`): if the bare
+      // package is in the catalog and its current version satisfies the
+      // override selector, derive a concrete minimum version from the fix
+      // range and promote it into the catalog so that pnpm installs the
+      // smallest patched release rather than the latest in the range.
+      if (!isPlainPackageName(key)) {
+        const bareName = getBarePackageName(key);
+        if (catalogNames.has(bareName)) {
+          const keyRange = key.slice(bareName.length + 1); // strip `name@`
+          const catalogVer = catalogVersions.get(bareName);
+          const coercedCatalog = catalogVer ? semver.coerce(catalogVer)?.version : undefined;
+          if (
+            coercedCatalog &&
+            semver.validRange(keyRange) &&
+            semver.satisfies(coercedCatalog, keyRange)
+          ) {
+            const minVer = semver.minVersion(val);
+            if (minVer) {
+              const existing = updates.get(bareName);
+              const base = existing ?? catalogVer ?? '';
+              if (base && compareSemVer(minVer.version, base) > 0) {
+                updates.set(bareName, minVer.version);
+                continue; // discard the override — catalog will be patched
+              }
+              // The existing update/catalog is already >= minVer. Discard the
+              // override if the updated version won't satisfy the selector
+              // anyway (the override condition will never fire after install).
+              const finalVer = existing ?? catalogVer ?? '';
+              const coercedFinal = finalVer ? semver.coerce(finalVer)?.version : undefined;
+              if (coercedFinal && !semver.satisfies(coercedFinal, keyRange)) {
+                continue; // dead override — catalog already exceeds the selector
+              }
+            }
+          }
+        }
       }
     }
     remaining.push(line);

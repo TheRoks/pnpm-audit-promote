@@ -103,6 +103,39 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
   });
 });
 
+describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
+  it('promotes catalog entry when a qualified override selector matches the catalog version', () => {
+    // pnpm audit --fix writes `vite@<=6.4.1: '>=6.4.2'`; catalog is at 6.3.5.
+    // The fix: promote catalog to the concrete minimum (6.4.2) and discard the override.
+    const yaml =
+      "packages:\n  - 'apps/*'\n\ncatalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.4.2'");
+    expect(out).not.toContain('vite@<=6.4.1');
+    expect(out).not.toContain('overrides:');
+  });
+
+  it('does not downgrade when a plain override already sets a higher version', () => {
+    // Plain `vite: 6.4.3` should win over the qualified minimum of 6.4.2.
+    const yaml =
+      "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.4.3'\n  vite@<=6.4.1: '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.4.3'");
+    expect(out).not.toContain('overrides:');
+  });
+
+  it('keeps a qualified override when the catalog version does not satisfy its selector', () => {
+    // Catalog already at 6.4.2, override selector <=6.4.1 does NOT match → keep.
+    const yaml = "catalog:\n  vite: '6.4.2'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain('vite@<=6.4.1');
+    expect(out).toContain("vite: '6.4.2'"); // catalog unchanged
+  });
+});
+
 describe('cross-major warning', () => {
   it('warns when promoting an override that crosses a major boundary', () => {
     const yaml = "catalog:\n  react: '17.0.2'\n\noverrides:\n  react: '18.3.1'\n";

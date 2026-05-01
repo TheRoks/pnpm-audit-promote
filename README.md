@@ -34,7 +34,7 @@ pnpm dlx pnpm-audit-promote
 npx pnpm-audit-promote
 ```
 
-Requires Node.js >= 20.19 and `pnpm` available on `PATH`.
+Requires Node.js >= 22 and `pnpm` available on `PATH`.
 
 ## Usage
 

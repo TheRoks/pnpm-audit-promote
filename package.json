@@ -12,7 +12,7 @@
     "security"
   ],
   "license": "MIT",
-  "author": "theroks",
+  "author": "TheRoks",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TheRoks/pnpm-audit-promote.git"

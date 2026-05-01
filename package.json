@@ -57,7 +57,6 @@
     "coverage": "vitest run --coverage",
     "check:exports": "publint && attw --pack --ignore-rules cjs-resolves-to-esm",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run check:exports",
-    "release": "changeset publish",
     "start": "node dist/cli.js"
   },
   "dependencies": {
@@ -68,7 +67,6 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
-    "@changesets/cli": "^2.27.0",
     "@eslint/js": "^10.0.1",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^25.6.0",

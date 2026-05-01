@@ -33,6 +33,12 @@ export interface RefreshOptions {
   skipAudit?: boolean;
   /** Skip `pnpm dedupe` calls. */
   skipDedupe?: boolean;
+  /**
+   * When false, the pre-audit catalog bump skips packages whose only
+   * non-vulnerable upgrade crosses a major version boundary (and logs a
+   * warning). Defaults to true.
+   */
+  allowMajor?: boolean;
 }
 
 /**
@@ -88,7 +94,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
 
   // Audit phase -----------------------------------------------------------
   if (!options.skipAudit) {
-    await preAuditCatalogBump(state, pnpm, logger);
+    await preAuditCatalogBump(state, pnpm, logger, options.allowMajor ?? true);
     await auditFix(state, pnpm, logger);
 
     logger.step('pnpm install (post-audit)');
@@ -124,9 +130,10 @@ async function preAuditCatalogBump(
   state: WorkspaceState,
   pnpm: PnpmRunner,
   logger: Logger,
+  allowMajor: boolean,
 ): Promise<void> {
   logger.step('Scanning audit for direct-dep vulnerabilities (pre-audit catalog bump)');
-  const bumps = await getDirectDepCatalogBumps(state, pnpm, logger);
+  const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, { allowMajor });
   if (bumps.size === 0) {
     logger.detail('No direct-dep vulnerabilities found.');
     return;
@@ -134,7 +141,8 @@ async function preAuditCatalogBump(
 
   logger.detail('Bumping catalog for direct-dep vulnerabilities:');
   for (const [k, v] of bumps) {
-    logger.bullet(`${k} -> ${v}`);
+    const annotation = tiers.get(k) === 'major' ? ' (MAJOR)' : '';
+    logger.bullet(`${k} -> ${v}${annotation}`);
   }
 
   state.desiredWorkspaceYaml = applyCatalogUpdates(state.desiredWorkspaceYaml, bumps);

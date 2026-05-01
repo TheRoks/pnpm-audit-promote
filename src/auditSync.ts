@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import semver from 'semver';
 import type { Logger } from './logger.js';
 import type { WorkspaceState } from './workspace.js';
 import type { PnpmRunner } from './pnpm.js';
@@ -8,6 +9,7 @@ import {
   applyCatalogUpdates,
   collapseBlankLines,
   getCatalogNames,
+  getCatalogVersions,
 } from './catalog.js';
 import { findMatchingBrace } from './jsonEdit.js';
 import {
@@ -15,6 +17,8 @@ import {
   getBarePackageName,
   getConcreteVersion,
   isPlainPackageName,
+  selectSafeBump,
+  type BumpTier,
 } from './semverUtil.js';
 
 interface PnpmAuditAdvisory {
@@ -28,28 +32,58 @@ interface PnpmAuditOutput {
 }
 
 /**
+ * Options for `getDirectDepCatalogBumps`.
+ */
+export interface DirectDepBumpOptions {
+  /**
+   * When false, packages whose only non-vulnerable upgrade crosses a major
+   * boundary are skipped (and a warning is logged) instead of being
+   * promoted into the catalog. Defaults to true.
+   */
+  allowMajor?: boolean;
+}
+
+/**
+ * Result of computing direct-dep catalog bumps. The `tiers` map records
+ * which tier (`patch` | `minor` | `major`) was selected for each bumped
+ * package, primarily so callers can render `(MAJOR)` annotations.
+ */
+export interface DirectDepBumpResult {
+  bumps: Map<string, string>;
+  tiers: Map<string, BumpTier>;
+}
+
+/**
  * Compute catalog version bumps for direct-dependency vulnerabilities found
- * by `pnpm audit --json`.
+ * by `pnpm audit --json`. Picks the smallest non-vulnerable version that is
+ * `>= the current catalog version`, preferring patch over minor over major.
+ * Major bumps are explicitly logged via `logger.warn` because they can
+ * introduce breaking changes.
  */
 export async function getDirectDepCatalogBumps(
   state: WorkspaceState,
   pnpm: PnpmRunner,
   logger: Logger,
-): Promise<Map<string, string>> {
+  options: DirectDepBumpOptions = {},
+): Promise<DirectDepBumpResult> {
+  const allowMajor = options.allowMajor ?? true;
   const bumps = new Map<string, string>();
+  const tiers = new Map<string, BumpTier>();
   const { stdout } = await pnpm.capture(['audit', '--json']);
-  if (!stdout.trim()) return bumps;
+  if (!stdout.trim()) return { bumps, tiers };
 
   let audit: PnpmAuditOutput;
   try {
     audit = JSON.parse(stdout) as PnpmAuditOutput;
   } catch {
     logger.warn('Could not parse audit JSON; skipping pre-audit bump.');
-    return bumps;
+    return { bumps, tiers };
   }
-  if (!audit.advisories) return bumps;
+  if (!audit.advisories) return { bumps, tiers };
 
   const catalogNames = getCatalogNames(state.desiredWorkspaceYaml);
+  const catalogVersions = getCatalogVersions(state.desiredWorkspaceYaml);
+  const versionCache = new Map<string, string[]>();
 
   for (const adv of Object.values(audit.advisories)) {
     const module = adv.module_name ?? '';
@@ -70,15 +104,94 @@ export async function getDirectDepCatalogBumps(
     }
     if (!isDirect) continue;
 
-    const version = getConcreteVersion(adv.patched_versions ?? '');
-    if (!version) continue;
+    const patchedRange = adv.patched_versions ?? '';
+    const current = catalogVersions.get(module);
+    let chosen: string | null = null;
+    let tier: BumpTier | null = null;
+
+    if (current) {
+      const available = await getAvailableVersions(pnpm, module, versionCache);
+      const safe = selectSafeBump(current, patchedRange, available);
+      if (safe) {
+        chosen = safe.version;
+        tier = safe.tier;
+      } else {
+        logger.warn(
+          `No non-vulnerable version >= ${current} found for ${module} (range: ${patchedRange}); falling back to advisory-suggested version.`,
+        );
+      }
+    }
+
+    if (!chosen) {
+      // Fallback: advisory-derived concrete version (legacy behavior).
+      chosen = getConcreteVersion(patchedRange);
+      if (chosen && current) {
+        tier = classifyTier(current, chosen);
+      }
+    }
+    if (!chosen) continue;
+
+    if (tier === 'major' && !allowMajor) {
+      logger.warn(
+        `Skipping ${module}: only a MAJOR bump (${current ?? '?'} -> ${chosen}) satisfies the advisory and --no-allow-major is set. Re-run with --allow-major to apply.`,
+      );
+      continue;
+    }
+
+    if (tier === 'major') {
+      logger.warn(
+        `Major version bump required for ${module}: ${current ?? '?'} -> ${chosen}. Review changelog for breaking changes before merging.`,
+      );
+    }
 
     const existing = bumps.get(module);
-    if (!existing || compareSemVer(version, existing) > 0) {
-      bumps.set(module, version);
+    if (!existing || compareSemVer(chosen, existing) > 0) {
+      bumps.set(module, chosen);
+      if (tier) tiers.set(module, tier);
     }
   }
-  return bumps;
+  return { bumps, tiers };
+}
+
+/**
+ * Fetch the published version list for `module` via `pnpm view`. Results are
+ * cached per call site to avoid duplicate network/registry hits when the
+ * same package appears in multiple advisories. Returns `[]` on any failure
+ * so callers transparently fall back to `semver.minVersion`-based logic.
+ */
+async function getAvailableVersions(
+  pnpm: PnpmRunner,
+  module: string,
+  cache: Map<string, string[]>,
+): Promise<string[]> {
+  const cached = cache.get(module);
+  if (cached) return cached;
+  let versions: string[] = [];
+  try {
+    const { stdout } = await pnpm.capture(['view', module, 'versions', '--json']);
+    const text = stdout.trim();
+    if (text) {
+      const parsed: unknown = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        versions = parsed.filter((v): v is string => typeof v === 'string');
+      } else if (typeof parsed === 'string') {
+        versions = [parsed];
+      }
+    }
+  } catch {
+    versions = [];
+  }
+  cache.set(module, versions);
+  return versions;
+}
+
+function classifyTier(from: string, to: string): BumpTier | null {
+  const a = semver.coerce(from)?.version;
+  const b = semver.coerce(to)?.version;
+  if (!a || !b) return null;
+  if (semver.major(b) > semver.major(a)) return 'major';
+  if (semver.minor(b) > semver.minor(a)) return 'minor';
+  return 'patch';
 }
 
 /**
@@ -116,10 +229,13 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
 
   if (updates.size === 0) return current;
 
+  const priorVersions = getCatalogVersions(current);
   logger.detail('Promoting direct-dep audit fixes into catalog:');
   for (const [k, v] of updates) {
-    logger.bullet(`${k} -> ${v}`);
+    const annotation = majorBumpAnnotation(priorVersions.get(k), v);
+    logger.bullet(`${k} -> ${v}${annotation}`);
   }
+  warnOnMajorPromotions(updates, priorVersions, logger);
 
   let newYaml = applyCatalogUpdates(current, updates);
 
@@ -190,10 +306,13 @@ export function syncPackageJsonOverridesIntoCatalog(
 
   if (promotions.size === 0) return desiredYaml;
 
+  const priorVersions = getCatalogVersions(desiredYaml);
   logger.detail('Promoting direct-dep audit fixes from package.json into catalog:');
   for (const [k, v] of promotions) {
-    logger.bullet(`${k} -> ${v}`);
+    const annotation = majorBumpAnnotation(priorVersions.get(k), v);
+    logger.bullet(`${k} -> ${v}${annotation}`);
   }
+  warnOnMajorPromotions(promotions, priorVersions, logger);
 
   const newYaml = applyCatalogUpdates(desiredYaml, promotions);
   state.saveWorkspaceYaml(newYaml);
@@ -232,4 +351,32 @@ export function syncPackageJsonOverridesIntoCatalog(
     fs.writeFileSync(state.rootPackageJson, newPj, 'utf8');
   }
   return newYaml;
+}
+
+function majorBumpAnnotation(prior: string | undefined, next: string): string {
+  if (!prior) return '';
+  try {
+    const a = semver.coerce(prior)?.version;
+    const b = semver.coerce(next)?.version;
+    if (a && b && semver.major(b) > semver.major(a)) return ' (MAJOR)';
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+function warnOnMajorPromotions(
+  updates: ReadonlyMap<string, string>,
+  priorVersions: ReadonlyMap<string, string>,
+  logger: Logger,
+): void {
+  for (const [k, v] of updates) {
+    const prior = priorVersions.get(k);
+    if (!prior) continue;
+    const a = semver.coerce(prior)?.version;
+    const b = semver.coerce(v)?.version;
+    if (a && b && semver.major(b) > semver.major(a)) {
+      logger.warn(`Major bump promoted for ${k}: ${prior} -> ${v}; review for breaking changes.`);
+    }
+  }
 }

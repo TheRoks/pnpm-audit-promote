@@ -110,7 +110,10 @@ describe('refreshDeps integration (mocked pnpm)', () => {
       },
     });
 
-    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view react versions --json': JSON.stringify(['18.2.0', '18.3.1']),
+    });
 
     await refreshDeps({
       path: tmp,
@@ -122,5 +125,120 @@ describe('refreshDeps integration (mocked pnpm)', () => {
 
     const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(final).toContain("react: '18.3.1'");
+  });
+
+  it('prefers patch over minor when both satisfy the advisory', async () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'react',
+          patched_versions: '>=18.2.1',
+          findings: [{ paths: ['. > react'] }],
+        },
+      },
+    });
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view react versions --json': JSON.stringify(['18.2.1', '18.3.1', '19.0.0']),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(final).toContain("react: '18.2.1'");
+  });
+
+  it('warns and bumps to major when only a major satisfies', async () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'react',
+          patched_versions: '>=19.0.0',
+          findings: [{ paths: ['. > react'] }],
+        },
+      },
+    });
+
+    const warnings: string[] = [];
+    const recordingLogger = {
+      ...silentLogger,
+      warn(msg: string) {
+        warnings.push(msg);
+      },
+    };
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view react versions --json': JSON.stringify(['18.2.0', '18.3.1', '19.0.0']),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: recordingLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(final).toContain("react: '19.0.0'");
+    expect(warnings.some((w) => /Major version bump required for react/.test(w))).toBe(true);
+  });
+
+  it('skips a major bump when allowMajor is false', async () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'react',
+          patched_versions: '>=19.0.0',
+          findings: [{ paths: ['. > react'] }],
+        },
+      },
+    });
+
+    const warnings: string[] = [];
+    const recordingLogger = {
+      ...silentLogger,
+      warn(msg: string) {
+        warnings.push(msg);
+      },
+    };
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view react versions --json': JSON.stringify(['18.2.0', '19.0.0']),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: recordingLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      allowMajor: false,
+    });
+
+    const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(final).toContain("react: '18.2.0'"); // unchanged
+    expect(warnings.some((w) => /--no-allow-major/.test(w) || /--allow-major/.test(w))).toBe(true);
   });
 });

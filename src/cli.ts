@@ -13,6 +13,7 @@ interface CliOptions {
   dryRun: boolean;
   audit: boolean;
   dedupe: boolean;
+  allowMajor: boolean;
   verbose: boolean;
   quiet: boolean;
 }
@@ -31,6 +32,11 @@ program
   .option('-n, --dry-run', 'Plan and log changes without writing files or invoking pnpm', false)
   .option('--no-audit', 'Skip the pnpm audit and catalog promotion phase')
   .option('--no-dedupe', 'Skip pnpm dedupe calls')
+  .option(
+    '--allow-major',
+    'Allow catalog bumps that cross a major version boundary (still logged as warnings). Use --no-allow-major to skip them.',
+    true,
+  )
   .option('-v, --verbose', 'Verbose output', false)
   .option('-q, --quiet', 'Quiet output (warnings + errors only)', false)
   .action(async (opts: CliOptions) => {
@@ -43,6 +49,7 @@ program
         dryRun: opts.dryRun,
         skipAudit: !opts.audit,
         skipDedupe: !opts.dedupe,
+        allowMajor: opts.allowMajor,
         logger,
       });
     } catch (e) {

@@ -65,6 +65,7 @@ function spawnPnpm(args: string[], opts: { cwd: string; inherit: boolean }): Pro
     const child = spawn(PNPM, args, {
       cwd: opts.cwd,
       stdio: opts.inherit ? 'inherit' : 'pipe',
+      env: { ...process.env, NODE_NO_WARNINGS: '1' },
     });
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {

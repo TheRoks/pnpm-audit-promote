@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { Logger } from './logger.js';
 import type { WorkspaceState } from './workspace.js';
+import { resolveWorkspacePackageDirs } from './workspace.js';
 import { findNodeModulesFolders, findWorkspaceFiles } from './fsWalk.js';
 import { findMatchingBrace, removeJsonProperty } from './jsonEdit.js';
 import { collapseBlankLines } from './catalog.js';
@@ -89,7 +90,10 @@ export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Log
 export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger): void {
   logger.step("Removing 'pnpm.overrides' from package.json files");
 
-  const packageJsons = findWorkspaceFiles(state.workspaceRoot, 'package.json');
+  const packageDirs = resolveWorkspacePackageDirs(state);
+  const packageJsons = findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
+    (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
+  );
 
   for (const pjPath of packageJsons) {
     let text: string;

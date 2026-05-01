@@ -11,7 +11,6 @@ Thanks for your interest in contributing!
 
 ```sh
 pnpm install
-pnpm run gen:version  # generates src/version.ts
 ```
 
 ## Development scripts

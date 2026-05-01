@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a defect
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal `pnpm-workspace.yaml` / `package.json` snippet and the exact CLI invocation.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pnpm-audit-promote version
+    validations:
+      required: true
+  - type: input
+    id: pnpm
+    attributes:
+      label: pnpm version
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+  - type: input
+    id: os
+    attributes:
+      label: OS

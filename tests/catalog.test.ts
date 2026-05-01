@@ -1,0 +1,88 @@
+import { describe, it, expect } from 'vitest';
+import {
+  applyCatalogUpdates,
+  collapseBlankLines,
+  getCatalogNames,
+  CATALOG_BLOCK_PATTERN,
+  OVERRIDES_BLOCK_PATTERN,
+} from '../src/catalog.js';
+
+const SAMPLE_LF = `packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n  '@scope/pkg': "1.0.0"\n  lodash: 4.17.21\n\noverrides:\n  semver: '^7.6.0'\n`;
+
+const SAMPLE_CRLF = SAMPLE_LF.replace(/\n/g, '\r\n');
+
+describe('getCatalogNames', () => {
+  it('returns catalog package names (LF)', () => {
+    const names = getCatalogNames(SAMPLE_LF);
+    expect([...names].sort()).toEqual(['@scope/pkg', 'lodash', 'react'].sort());
+  });
+
+  it('returns catalog package names (CRLF)', () => {
+    const names = getCatalogNames(SAMPLE_CRLF);
+    expect(names.has('react')).toBe(true);
+    expect(names.has('@scope/pkg')).toBe(true);
+  });
+
+  it('returns empty set when no catalog block', () => {
+    expect(getCatalogNames('packages:\n  - apps/*\n').size).toBe(0);
+  });
+});
+
+describe('applyCatalogUpdates', () => {
+  it('updates a single catalog version preserving quoting style', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['react', '18.3.1']]));
+    expect(out).toContain("react: '18.3.1'");
+    expect(out).toContain('lodash: 4.17.21'); // unchanged, unquoted preserved
+  });
+
+  it('preserves CRLF line endings', () => {
+    const out = applyCatalogUpdates(SAMPLE_CRLF, new Map([['react', '18.3.1']]));
+    expect(out.includes('\r\n')).toBe(true);
+    expect(out).toContain("react: '18.3.1'");
+  });
+
+  it('updates scoped package names', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['@scope/pkg', '2.0.0']]));
+    expect(out).toContain("'@scope/pkg': '2.0.0'");
+  });
+
+  it('returns input unchanged when updates is empty', () => {
+    expect(applyCatalogUpdates(SAMPLE_LF, new Map())).toBe(SAMPLE_LF);
+  });
+
+  it('returns input unchanged when no catalog block exists', () => {
+    const yaml = "packages:\n  - 'apps/*'\n";
+    expect(applyCatalogUpdates(yaml, new Map([['x', '1.0.0']]))).toBe(yaml);
+  });
+
+  it('does not swallow following lines (multiline regex bug guard)', () => {
+    const out = applyCatalogUpdates(SAMPLE_LF, new Map([['react', '99.0.0']]));
+    expect(out).toContain("'@scope/pkg'");
+    expect(out).toContain('lodash');
+    expect(out).toContain('overrides:');
+  });
+});
+
+describe('collapseBlankLines', () => {
+  it('collapses 3+ newlines to two', () => {
+    expect(collapseBlankLines('a\n\n\n\nb')).toBe('a\n\nb');
+  });
+
+  it('preserves CRLF', () => {
+    expect(collapseBlankLines('a\r\n\r\n\r\n\r\nb')).toBe('a\r\n\r\nb');
+  });
+
+  it('leaves two newlines alone', () => {
+    expect(collapseBlankLines('a\n\nb')).toBe('a\n\nb');
+  });
+});
+
+describe('block patterns', () => {
+  it('CATALOG_BLOCK_PATTERN matches catalog block', () => {
+    expect(CATALOG_BLOCK_PATTERN.exec(SAMPLE_LF)).toBeTruthy();
+  });
+
+  it('OVERRIDES_BLOCK_PATTERN matches overrides block', () => {
+    expect(OVERRIDES_BLOCK_PATTERN.exec(SAMPLE_LF)).toBeTruthy();
+  });
+});

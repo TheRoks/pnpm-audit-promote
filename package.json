@@ -1,0 +1,85 @@
+{
+  "name": "pnpm-audit-promote",
+  "version": "1.0.0",
+  "description": "Refresh pnpm dependencies, run audit --fix, and promote catalog-eligible overrides back into the pnpm catalog.",
+  "keywords": [
+    "pnpm",
+    "audit",
+    "catalog",
+    "overrides",
+    "workspace",
+    "monorepo",
+    "security"
+  ],
+  "license": "MIT",
+  "author": "theroks",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theroks/pnpm-audit-promote.git"
+  },
+  "bugs": {
+    "url": "https://github.com/theroks/pnpm-audit-promote/issues"
+  },
+  "homepage": "https://github.com/theroks/pnpm-audit-promote#readme",
+  "type": "module",
+  "bin": {
+    "pnpm-audit-promote": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm run gen:version && tsc -p tsconfig.json",
+    "clean": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
+    "gen:version": "node scripts/gen-version.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "check:exports": "publint && attw --pack --ignore-rules cjs-resolves-to-esm",
+    "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run check:exports",
+    "release": "changeset publish",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "cross-spawn": "^7.0.6",
+    "picocolors": "^1.1.1",
+    "semver": "^7.6.3"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@changesets/cli": "^2.27.0",
+    "@eslint/js": "^10.0.1",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^25.6.0",
+    "@types/semver": "^7.5.8",
+    "@vitest/coverage-v8": "^4.1.5",
+    "eslint": "^10.2.1",
+    "prettier": "^3.3.3",
+    "publint": "^0.3.18",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.1",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
+  }
+}

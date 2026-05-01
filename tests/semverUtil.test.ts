@@ -1,0 +1,72 @@
+import { describe, it, expect } from 'vitest';
+import {
+  compareSemVer,
+  getBarePackageName,
+  getConcreteVersion,
+  isPlainPackageName,
+} from '../src/semverUtil.js';
+
+describe('compareSemVer', () => {
+  it('compares basic versions', () => {
+    expect(compareSemVer('1.0.0', '1.0.1')).toBe(-1);
+    expect(compareSemVer('2.0.0', '1.99.99')).toBe(1);
+    expect(compareSemVer('1.2.3', '1.2.3')).toBe(0);
+  });
+
+  it('handles prerelease ordering', () => {
+    expect(compareSemVer('1.0.0-alpha', '1.0.0')).toBe(-1);
+    expect(compareSemVer('1.0.0-beta', '1.0.0-alpha')).toBe(1);
+  });
+
+  it('coerces non-strict version strings', () => {
+    expect(compareSemVer('1.0', '1.0.1')).toBe(-1);
+  });
+});
+
+describe('getBarePackageName', () => {
+  it('returns plain name unchanged', () => {
+    expect(getBarePackageName('lodash')).toBe('lodash');
+  });
+
+  it('strips version qualifier', () => {
+    expect(getBarePackageName('vite@>=7.0.0 <=7.3.1')).toBe('vite');
+  });
+
+  it('preserves scoped package names', () => {
+    expect(getBarePackageName('@scope/pkg')).toBe('@scope/pkg');
+    expect(getBarePackageName('@scope/pkg@^1.0.0')).toBe('@scope/pkg');
+  });
+});
+
+describe('getConcreteVersion', () => {
+  it('extracts a concrete version from a range', () => {
+    expect(getConcreteVersion('^1.2.3')).toBe('1.2.3');
+    expect(getConcreteVersion('>=2.0.0 <3.0.0')).toBe('2.0.0');
+  });
+
+  it('returns null for catalog references', () => {
+    expect(getConcreteVersion('$react')).toBeNull();
+  });
+
+  it('returns null for empty/undefined', () => {
+    expect(getConcreteVersion('')).toBeNull();
+    expect(getConcreteVersion(null)).toBeNull();
+    expect(getConcreteVersion(undefined)).toBeNull();
+  });
+
+  it('preserves prerelease', () => {
+    expect(getConcreteVersion('1.0.0-rc.1')).toBe('1.0.0-rc.1');
+  });
+});
+
+describe('isPlainPackageName', () => {
+  it('identifies plain names', () => {
+    expect(isPlainPackageName('lodash')).toBe(true);
+    expect(isPlainPackageName('@scope/pkg')).toBe(true);
+  });
+
+  it('rejects names with qualifiers', () => {
+    expect(isPlainPackageName('vite@^7.0.0')).toBe(false);
+    expect(isPlainPackageName('@scope/pkg@1.0.0')).toBe(false);
+  });
+});

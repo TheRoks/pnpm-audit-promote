@@ -20,7 +20,9 @@ describe('findNodeModulesFolders', () => {
     fs.mkdirSync(path.join(tmp, 'packages', 'a', 'node_modules'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'dist', 'node_modules'), { recursive: true }); // pruned parent
 
-    const found = findNodeModulesFolders(tmp).map((p) => path.relative(tmp, p).replace(/\\/g, '/')).sort();
+    const found = findNodeModulesFolders(tmp)
+      .map((p) => path.relative(tmp, p).replace(/\\/g, '/'))
+      .sort();
 
     expect(found).toEqual(['app/node_modules', 'packages/a/node_modules']);
   });

@@ -46,7 +46,10 @@ function mockExitAfter(code: number, delayMs: number): void {
   });
 }
 
-function makeChildWithStdout(code: number, stdoutText: string): EventEmitter & {
+function makeChildWithStdout(
+  code: number,
+  stdoutText: string,
+): EventEmitter & {
   stdout: EventEmitter;
 } {
   const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter };

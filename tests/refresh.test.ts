@@ -45,7 +45,11 @@ function makeRecordingRunner(stdoutByCmd: Record<string, string> = {}): {
 
 describe('refreshDeps integration (mocked pnpm)', () => {
   it('rejects destructive execution in non-interactive mode without --force', async () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\n  react: '18.2.0'\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
 
     const { runner } = makeRecordingRunner();

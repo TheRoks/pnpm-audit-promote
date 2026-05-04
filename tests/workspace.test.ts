@@ -22,14 +22,22 @@ describe('WorkspaceState', () => {
   });
 
   it('initializes and detects CRLF line endings', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\r\n  react: '18.2.0'\r\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\r\n  react: '18.2.0'\r\n",
+      'utf8',
+    );
     const ws = WorkspaceState.initialize(tmp);
     expect(ws.yamlEol).toBe('\r\n');
     expect(ws.desiredWorkspaceYaml).toContain("react: '18.2.0'");
   });
 
   it('keeps current EOL when detectEol read fails', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\n  react: '18.2.0'\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
     const ws = WorkspaceState.initialize(tmp);
     fs.rmSync(path.join(tmp, 'pnpm-workspace.yaml'), { force: true });
     ws.detectEol();
@@ -37,18 +45,30 @@ describe('WorkspaceState', () => {
   });
 
   it('restores workspace yaml when content drift is detected', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\n  react: '18.2.0'\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
     const ws = WorkspaceState.initialize(tmp);
     ws.desiredWorkspaceYaml = "catalog:\n  react: '18.3.1'\n";
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\n  react: '18.2.0'\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
 
     const restored = ws.restoreWorkspaceYaml(silentLogger);
     expect(restored).toBe(true);
-    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain("18.3.1");
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain('18.3.1');
   });
 
   it('does not restore when desired content is empty', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "catalog:\n  react: '18.2.0'\n", 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
     const ws = WorkspaceState.initialize(tmp);
     ws.desiredWorkspaceYaml = '';
     expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
@@ -57,7 +77,11 @@ describe('WorkspaceState', () => {
 
 describe('resolveWorkspacePackageDirs', () => {
   it('returns null when no workspace patterns exist', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'catalog:\n  react: "18.2.0"\n', 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      'catalog:\n  react: "18.2.0"\n',
+      'utf8',
+    );
     fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root' }), 'utf8');
     const ws = WorkspaceState.initialize(tmp);
     expect(resolveWorkspacePackageDirs(ws)).toBeNull();
@@ -82,8 +106,16 @@ describe('resolveWorkspacePackageDirs', () => {
   });
 
   it('falls back to root package.json workspaces when yaml packages missing', () => {
-    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'catalog:\n  react: "18.2.0"\n', 'utf8');
-    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['packages/*'] }), 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      'catalog:\n  react: "18.2.0"\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', workspaces: ['packages/*'] }),
+      'utf8',
+    );
     fs.mkdirSync(path.join(tmp, 'packages', 'a'), { recursive: true });
 
     const ws = WorkspaceState.initialize(tmp);

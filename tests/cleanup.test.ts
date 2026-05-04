@@ -15,8 +15,16 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pap-cleanup-'));
-  fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), "packages:\n  - 'apps/*'\n\noverrides:\n  react: '18.3.1'\n", 'utf8');
-  fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root', pnpm: { overrides: { react: '18.3.1' } } }, null, 2), 'utf8');
+  fs.writeFileSync(
+    path.join(tmp, 'pnpm-workspace.yaml'),
+    "packages:\n  - 'apps/*'\n\noverrides:\n  react: '18.3.1'\n",
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(tmp, 'package.json'),
+    JSON.stringify({ name: 'root', pnpm: { overrides: { react: '18.3.1' } } }, null, 2),
+    'utf8',
+  );
 });
 
 afterEach(() => {
@@ -33,7 +41,11 @@ describe('cleanup helpers', () => {
     const state = makeState();
     fs.writeFileSync(state.lockFile, 'x', 'utf8');
     const logs: string[] = [];
-    const logger = createLogger({ out: (l) => logs.push(l), err: (l) => logs.push(l), color: false });
+    const logger = createLogger({
+      out: (l) => logs.push(l),
+      err: (l) => logs.push(l),
+      color: false,
+    });
 
     removePnpmLockFile(state, logger);
     expect(fs.existsSync(state.lockFile)).toBe(false);
@@ -109,7 +121,9 @@ describe('cleanup helpers', () => {
     const logger = createLogger({ color: false });
 
     removeWorkspaceOverridesBlock(state, logger);
-    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain('overrides:');
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(
+      'overrides:',
+    );
 
     removeWorkspaceOverridesBlock(state, logger);
     expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(true);
@@ -140,7 +154,11 @@ describe('cleanup helpers', () => {
     const parseSpy = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
       throw new Error('parse fail');
     });
-    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root', pnpm: { overrides: { react: '18.3.1' } } }, null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', pnpm: { overrides: { react: '18.3.1' } } }, null, 2),
+      'utf8',
+    );
     removePackageJsonOverrides(state, logger);
     expect(parseSpy).toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();

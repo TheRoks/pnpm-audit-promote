@@ -10,7 +10,12 @@ describe('createLogger verbosity behavior', () => {
   it('suppresses trace output at normal level', () => {
     const out: string[] = [];
     const err: string[] = [];
-    const logger = createLogger({ level: 'normal', out: (line) => out.push(line), err: (line) => err.push(line), color: false });
+    const logger = createLogger({
+      level: 'normal',
+      out: (line) => out.push(line),
+      err: (line) => err.push(line),
+      color: false,
+    });
 
     logger.step('Install dependencies');
     logger.detail('Running install phase');

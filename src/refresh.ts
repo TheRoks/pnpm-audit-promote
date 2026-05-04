@@ -1,5 +1,5 @@
 import * as readline from 'node:readline';
-import { consoleLogger, type Logger } from './logger.js';
+import { consoleLogger, isVerboseLoggingEnabled, type Logger } from './logger.js';
 import { WorkspaceState } from './workspace.js';
 import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm.js';
 import {
@@ -63,55 +63,90 @@ export interface RefreshOptions {
 export async function refreshDeps(options: RefreshOptions): Promise<void> {
   const logger = options.logger ?? consoleLogger;
   const dryRun = options.dryRun ?? false;
+  const startedAt = Date.now();
+  const totalProgressSteps = options.skipAudit === true ? 6 : 11;
+  let progressStep = 0;
+  const nextProgressStep = (title: string): void => {
+    progressStep += 1;
+    logger.step(`Step ${progressStep}/${totalProgressSteps} — ${title}`);
+  };
+  const progressLogger: Logger = {
+    ...logger,
+    step(message: string): void {
+      nextProgressStep(message);
+    },
+  };
 
   if (!options.pnpm && !dryRun) {
     await ensurePnpmAvailable();
   }
   const state = WorkspaceState.initialize(options.path, { dryRun });
-  const pnpm = options.pnpm ?? createPnpmRunner({ cwd: state.workspaceRoot, logger, dryRun });
+  const pnpm =
+    options.pnpm ??
+    createPnpmRunner({
+      cwd: state.workspaceRoot,
+      logger,
+      inheritOutput: isVerboseLoggingEnabled(logger),
+      dryRun,
+    });
 
-  logger.info(`Workspace: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
+  logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
 
   if (!(await confirmDestructive(Boolean(options.force), dryRun))) {
-    logger.info('Aborted.');
+    logger.info('Operation canceled by user.');
     return;
   }
 
   // Cleanup phase ---------------------------------------------------------
-  removePnpmLockFile(state, logger);
-  removeNodeModulesFolders(state, logger);
-  removeWorkspaceOverridesBlock(state, logger);
-  removePackageJsonOverrides(state, logger);
+  removePnpmLockFile(state, progressLogger);
+  removeNodeModulesFolders(state, progressLogger);
+  removeWorkspaceOverridesBlock(state, progressLogger);
+  removePackageJsonOverrides(state, progressLogger);
 
   // Install phase ---------------------------------------------------------
-  logger.step('pnpm install');
+  progressLogger.step('Install dependencies');
   await runAndRestore(pnpm, state, logger, ['install']);
 
+  progressLogger.step('Deduplicate dependency graph');
   if (!options.skipDedupe) {
-    logger.step('pnpm dedupe');
     await runAndRestore(pnpm, state, logger, ['dedupe']);
+  } else {
+    logger.detail('Skipped dedupe (--no-dedupe).');
   }
 
   // Audit phase -----------------------------------------------------------
   if (!options.skipAudit) {
-    await preAuditCatalogBump(state, pnpm, logger, options.allowMajor ?? true);
-    await auditFix(state, pnpm, logger);
+    await preAuditCatalogBump(state, pnpm, progressLogger, options.allowMajor ?? true);
+    await auditFix(state, pnpm, progressLogger);
 
-    logger.step('pnpm install (post-audit)');
+    progressLogger.step('Reinstall dependencies (post-audit reconciliation)');
     await runAndRestore(pnpm, state, logger, ['install']);
 
+    progressLogger.step('Deduplicate dependency graph');
     if (!options.skipDedupe) {
-      logger.step('pnpm dedupe');
       await runAndRestore(pnpm, state, logger, ['dedupe']);
+    } else {
+      logger.detail('Skipped dedupe (--no-dedupe).');
     }
+  } else {
+    logger.detail('Skipped audit and catalog promotion (--no-audit).');
   }
 
   logger.raw('');
+  const totalElapsed = formatDuration(Date.now() - startedAt);
   logger.success(
     dryRun
-      ? 'Dry-run complete. No files were modified.'
-      : 'Done. Review the diff in pnpm-workspace.yaml and package.json files before committing.',
+      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
   );
+}
+
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
 }
 
 async function runAndRestore(
@@ -132,14 +167,16 @@ async function preAuditCatalogBump(
   logger: Logger,
   allowMajor: boolean,
 ): Promise<void> {
-  logger.step('Scanning audit for direct-dep vulnerabilities (pre-audit catalog bump)');
+  logger.step('Scan direct dependencies for vulnerable catalog entries');
   const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, { allowMajor });
+  logger.step('Reinstall dependencies after catalog updates');
   if (bumps.size === 0) {
-    logger.detail('No direct-dep vulnerabilities found.');
+    logger.detail('No vulnerable direct dependencies detected in catalog-managed packages.');
+    logger.detail('Skipped reinstall: no catalog updates were required.');
     return;
   }
 
-  logger.detail('Bumping catalog for direct-dep vulnerabilities:');
+  logger.detail('Applying catalog updates for vulnerable direct dependencies:');
   for (const [k, v] of bumps) {
     const annotation = tiers.get(k) === 'major' ? ' (MAJOR)' : '';
     logger.bullet(`${k} -> ${v}${annotation}`);
@@ -148,15 +185,18 @@ async function preAuditCatalogBump(
   state.desiredWorkspaceYaml = applyCatalogUpdates(state.desiredWorkspaceYaml, bumps);
   state.saveWorkspaceYaml(state.desiredWorkspaceYaml);
 
-  logger.step('pnpm install (post catalog bump)');
   await runAndRestore(pnpm, state, logger, ['install']);
 }
 
-async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger): Promise<void> {
-  logger.step('pnpm audit --fix');
+async function auditFix(
+  state: WorkspaceState,
+  pnpm: PnpmRunner,
+  logger: Logger,
+): Promise<void> {
+  logger.step('Apply pnpm audit fixes');
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
   const code = await pnpm.runAllowFail(['audit', '--fix']);
-  logger.detail(`pnpm audit exit code: ${code}`);
+  logger.detail(`pnpm audit --fix completed with exit code ${code}.`);
 
   // Safety net: promote any catalog-eligible overrides into the catalog.
   state.desiredWorkspaceYaml = syncAuditOverridesIntoCatalog(state, logger);

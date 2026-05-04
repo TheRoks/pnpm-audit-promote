@@ -5,6 +5,12 @@ export type LogLevel = 'silent' | 'quiet' | 'normal' | 'verbose';
 export interface Logger {
   step(message: string): void;
   detail(message: string): void;
+  /** True when detail/progress messages should be visible. */
+  showsDetails?(): boolean;
+  /** Verbose-only diagnostic line (for subprocess command tracing, etc.). */
+  trace?(message: string): void;
+  /** True when verbose diagnostics are enabled. */
+  isVerbose?(): boolean;
   /** A bullet under a `detail` group. Quiet-suppressed like `detail`. */
   bullet(message: string): void;
   warn(message: string): void;
@@ -48,6 +54,16 @@ export function createLogger(options: ConsoleLoggerOptions = {}): Logger {
       if (rank < LEVEL_RANK.normal) return;
       out(c(pc.gray, `    ${message}`));
     },
+    showsDetails(): boolean {
+      return rank >= LEVEL_RANK.normal;
+    },
+    trace(message): void {
+      if (rank < LEVEL_RANK.verbose) return;
+      out(c(pc.gray, `      ${message}`));
+    },
+    isVerbose(): boolean {
+      return rank >= LEVEL_RANK.verbose;
+    },
     bullet(message): void {
       if (rank < LEVEL_RANK.normal) return;
       out(c(pc.gray, `      ${message}`));
@@ -69,6 +85,16 @@ export function createLogger(options: ConsoleLoggerOptions = {}): Logger {
       out(message);
     },
   };
+}
+
+/** Returns true when a logger should emit verbose diagnostics. */
+export function isVerboseLoggingEnabled(logger: Logger): boolean {
+  return logger.isVerbose?.() ?? false;
+}
+
+/** Returns true when detail/progress logging should be emitted. */
+export function isDetailLoggingEnabled(logger: Logger): boolean {
+  return logger.showsDetails?.() ?? true;
 }
 
 /** Default logger instance at `normal` level. Kept for backwards compatibility. */

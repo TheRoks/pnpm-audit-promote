@@ -150,7 +150,7 @@ export function readWorkspaceOverrides(yaml: string): Map<string, string> {
   if (!m) return out;
   const body = m[2] ?? '';
   const entryRe =
-    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
+    /^\s+(?:'([^']+)'|"([^"]+)"|([^'"\r\n]+?))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
   for (const line of body.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const em = entryRe.exec(line);

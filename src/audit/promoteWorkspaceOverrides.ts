@@ -28,7 +28,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
   const remaining: string[] = [];
   const updates = new Map<string, string>();
   const entryPattern =
-    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
+    /^\s+(?:'([^']+)'|"([^"]+)"|([^'"\r\n]+?))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
 
   for (const line of overridesBody.split(/\r?\n/)) {
     if (!line.trim()) continue;

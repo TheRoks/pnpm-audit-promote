@@ -184,6 +184,41 @@ describe('readWorkspaceOverrides / readPackageJsonOverrides / readAllOverrides',
     const all = readAllOverrides(yaml, pj);
     expect(all.get('shared')).toEqual({ value: '2.0.0', source: 'package.json' });
   });
+
+  it('parses unquoted selectors that contain spaces (e.g. multi-bound semver ranges)', () => {
+    const yaml = [
+      'overrides:',
+      "  axios@>=1.0.0 <1.15.0: '>=1.15.0'",
+      "  minimatch@>=9.0.0 <9.0.6: '>=9.0.6'",
+      "  brace-expansion@>=4.0.0 <5.0.5: '>=5.0.5'",
+    ].join('\n');
+    const out = readWorkspaceOverrides(yaml);
+    expect(out.get('axios@>=1.0.0 <1.15.0')).toBe('>=1.15.0');
+    expect(out.get('minimatch@>=9.0.0 <9.0.6')).toBe('>=9.0.6');
+    expect(out.get('brace-expansion@>=4.0.0 <5.0.5')).toBe('>=5.0.5');
+    expect(out.size).toBe(3);
+  });
+
+  it('diffOverrides detects removals of overrides whose selector contains spaces', () => {
+    // Simulates the real-world case: original yaml had space-containing selectors;
+    // after the run some were removed. The summary must report them as "removed".
+    const originalYaml = [
+      'overrides:',
+      "  axios@>=1.0.0 <1.15.0: '>=1.15.0'",
+      "  minimatch@>=9.0.0 <9.0.6: '>=9.0.6'",
+      "  brace-expansion@>=4.0.0 <5.0.5: '>=5.0.5'",
+    ].join('\n');
+    const finalYaml = ['overrides:', "  brace-expansion@>=4.0.0 <5.0.5: '>=5.0.5'"].join('\n');
+
+    const originalOverrides = readAllOverrides(originalYaml, null);
+    const finalOverrides = readAllOverrides(finalYaml, null);
+    const diff = diffOverrides(originalOverrides, finalOverrides);
+
+    const removed = diff.filter((d) => d.kind === 'removed');
+    expect(removed).toHaveLength(2);
+    expect(removed.find((d) => d.selector === 'axios@>=1.0.0 <1.15.0')).toBeDefined();
+    expect(removed.find((d) => d.selector === 'minimatch@>=9.0.0 <9.0.6')).toBeDefined();
+  });
 });
 
 describe('renderTerminalSummary', () => {

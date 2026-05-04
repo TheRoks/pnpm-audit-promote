@@ -42,17 +42,17 @@ Requires Node.js >= 22 and `pnpm` available on `PATH`.
 pnpm-audit-promote [options]
 ```
 
-| Flag                        | Description                                                 | Default |
-| --------------------------- | ----------------------------------------------------------- | ------- |
-| `-p, --path <dir>`          | Workspace root containing `pnpm-workspace.yaml`             | `cwd`   |
-| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt             | `false` |
-| `-n, --dry-run`             | Plan and log changes without writing files or invoking pnpm | `false` |
-| `--no-audit`                | Skip the audit + catalog promotion phase                    |         |
-| `--no-dedupe`               | Skip `pnpm dedupe` calls                                    |         |
-| `-v, --verbose`             | Verbose output                                              | `false` |
-| `-q, --quiet`               | Quiet output (warnings + errors only)                       | `false` |
-| `-V, --version`             | Print version                                               |         |
-| `-h, --help`                | Print help                                                  |         |
+| Flag                        | Description                                        | Default |
+| --------------------------- | -------------------------------------------------- | ------- |
+| `-p, --path <dir>`          | Workspace root containing `pnpm-workspace.yaml`    | `cwd`   |
+| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt    | `false` |
+| `-n, --dry-run`             | Plan and log changes without writing files or pnpm | `false` |
+| `--no-audit`                | Skip the audit + catalog promotion phase           |         |
+| `--no-dedupe`               | Skip `pnpm dedupe` calls                           |         |
+| `-v, --verbose`             | Verbose output (raw pnpm output + tracing)         | `false` |
+| `-q, --quiet`               | Quiet output (warnings + errors only)              | `false` |
+| `-V, --version`             | Print version                                      |         |
+| `-h, --help`                | Print help                                         |         |
 
 ### Example
 
@@ -60,6 +60,12 @@ pnpm-audit-promote [options]
 pnpm-audit-promote --force
 pnpm-audit-promote --dry-run --verbose
 ```
+
+### Output modes
+
+- **Default (`normal`)**: clean, decision-focused CLI output (phases, actions, and outcomes).
+- **`--verbose`**: includes everything from default mode plus raw `pnpm` command output.
+- **`--quiet`**: warnings + errors only.
 
 ## What it does (in order)
 

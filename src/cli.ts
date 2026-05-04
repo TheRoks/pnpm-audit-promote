@@ -39,7 +39,11 @@ program
     'Allow catalog bumps that cross a major version boundary (still logged as warnings). Use --no-allow-major to skip them.',
     true,
   )
-  .option('-v, --verbose', 'Verbose output', false)
+  .option(
+    '-v, --verbose',
+    'Verbose output (includes raw pnpm stdout/stderr and command tracing)',
+    false,
+  )
   .option('-q, --quiet', 'Quiet output (warnings + errors only)', false)
   .action(async (opts: CliOptions) => {
     const level: LogLevel = opts.quiet ? 'quiet' : opts.verbose ? 'verbose' : 'normal';

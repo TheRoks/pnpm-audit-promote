@@ -44,6 +44,32 @@ function makeRecordingRunner(stdoutByCmd: Record<string, string> = {}): {
 }
 
 describe('refreshDeps integration (mocked pnpm)', () => {
+  it('rejects destructive execution in non-interactive mode without --force', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const { runner } = makeRecordingRunner();
+    const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: false });
+    try {
+      await expect(
+        refreshDeps({
+          path: tmp,
+          logger: silentLogger,
+          pnpm: runner,
+        }),
+      ).rejects.toThrow(/Refusing to run destructive operations non-interactively/);
+    } finally {
+      if (ttyDescriptor) {
+        Object.defineProperty(process.stdin, 'isTTY', ttyDescriptor);
+      }
+    }
+  });
+
   it('completes happy path with skipAudit and skipDedupe', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
@@ -93,6 +119,38 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     });
 
     expect(fs.existsSync(path.join(tmp, 'pnpm-lock.yaml'))).toBe(true);
+  });
+
+  it('reports numbered progress steps including cleanup phase', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const steps: string[] = [];
+    const recordingLogger = {
+      ...silentLogger,
+      step(message: string) {
+        steps.push(message);
+      },
+    };
+
+    const { runner } = makeRecordingRunner();
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: recordingLogger,
+      pnpm: runner,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(steps).toContain('Step 1/6 — Remove pnpm lockfile');
+    expect(steps).toContain('Step 2/6 — Remove node_modules directories');
+    expect(steps).toContain('Step 6/6 — Deduplicate dependency graph');
   });
 
   it('promotes direct-dep audit findings into catalog', async () => {
@@ -204,6 +262,46 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // NOT the latest available (7.3.2).
     expect(final).toContain("vite: '6.4.2'");
     expect(final).not.toContain('7.');
+  });
+
+  it('uses the patched version for the matching vulnerable range, not another range', async () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'vite',
+          vulnerable_versions: '<=6.4.1',
+          patched_versions: '>=6.4.2',
+          findings: [{ paths: ['. > vite'] }],
+        },
+        '2': {
+          module_name: 'vite',
+          vulnerable_versions: '>=7.0.0 <=7.3.1',
+          patched_versions: '>=7.3.2',
+          findings: [{ paths: ['. > vite'] }],
+        },
+      },
+    });
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view vite versions --json': JSON.stringify(['6.3.5', '6.4.2', '7.3.2']),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    const final = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(final).toContain("vite: '6.4.2'");
+    expect(final).not.toContain('7.3.2');
   });
 
   it('warns and bumps to major when only a major satisfies', async () => {

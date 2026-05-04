@@ -22,6 +22,11 @@ describe('compareSemVer', () => {
   it('coerces non-strict version strings', () => {
     expect(compareSemVer('1.0', '1.0.1')).toBe(-1);
   });
+
+  it('falls back to manual compare when prerelease suffixes are invalid for semver.compare', () => {
+    expect(compareSemVer('1.0.0-?', '1.0.0-alpha')).toBe(-1);
+    expect(compareSemVer('2.0.0-?', '1.9.9')).toBe(1);
+  });
 });
 
 describe('getBarePackageName', () => {
@@ -106,5 +111,20 @@ describe('selectSafeBump', () => {
   it('ignores prereleases in the available list', () => {
     const r = selectSafeBump('1.0.0', '>=1.0.1', ['1.0.1-beta.1', '1.0.1', '1.0.2']);
     expect(r).toEqual({ version: '1.0.1', tier: 'patch' });
+  });
+
+  it('returns null when current version cannot be coerced', () => {
+    const r = selectSafeBump('not-a-version', '>=1.0.0', ['1.0.0']);
+    expect(r).toBeNull();
+  });
+
+  it('returns null for invalid or empty patched ranges', () => {
+    expect(selectSafeBump('1.0.0', '', ['1.0.1'])).toBeNull();
+    expect(selectSafeBump('1.0.0', 'definitely-not-a-range', ['1.0.1'])).toBeNull();
+  });
+
+  it('returns null when fallback minVersion cannot be derived', () => {
+    const r = selectSafeBump('1.0.0', 'bad-range-token', []);
+    expect(r).toBeNull();
   });
 });

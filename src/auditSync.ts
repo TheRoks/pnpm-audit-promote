@@ -24,6 +24,7 @@ import {
 interface PnpmAuditAdvisory {
   module_name?: string;
   patched_versions?: string;
+  vulnerable_versions?: string;
   findings?: Array<{ paths?: string[] }>;
 }
 
@@ -79,7 +80,7 @@ export async function getDirectDepCatalogBumps(
   try {
     audit = JSON.parse(stdout) as PnpmAuditOutput;
   } catch {
-    logger.warn('Could not parse audit JSON; skipping pre-audit bump.');
+    logger.warn('Could not parse audit JSON. Skipping pre-audit catalog bump.');
     return { bumps, tiers };
   }
   if (!audit.advisories) return { bumps, tiers };
@@ -92,8 +93,15 @@ export async function getDirectDepCatalogBumps(
     const module = adv.module_name ?? '';
     if (!catalogNames.has(module)) continue;
 
-    const patchedRange = adv.patched_versions ?? '';
     const current = catalogVersions.get(module);
+    if (!advisoryAppliesToCurrent(current, adv.vulnerable_versions)) {
+      logger.detail(
+        `Skipped advisory for ${module}: catalog version ${current ?? '?'} is outside vulnerable range ${adv.vulnerable_versions ?? '?'}.`,
+      );
+      continue;
+    }
+
+    const patchedRange = adv.patched_versions ?? '';
     let chosen: string | null = null;
     let tier: BumpTier | null = null;
 
@@ -105,7 +113,7 @@ export async function getDirectDepCatalogBumps(
         tier = safe.tier;
       } else {
         logger.warn(
-          `No non-vulnerable version >= ${current} found for ${module} (range: ${patchedRange}); falling back to advisory-suggested version.`,
+          `No non-vulnerable version >= ${current} found for ${module} (range: ${patchedRange}). Falling back to advisory-suggested version.`,
         );
       }
     }
@@ -121,7 +129,7 @@ export async function getDirectDepCatalogBumps(
 
     if (tier === 'major' && !allowMajor) {
       logger.warn(
-        `Skipping ${module}: only a MAJOR bump (${current ?? '?'} -> ${chosen}) satisfies the advisory and --no-allow-major is set. Re-run with --allow-major to apply.`,
+        `Skipped ${module}: only a MAJOR bump (${current ?? '?'} -> ${chosen}) satisfies the advisory and --no-allow-major is set. Re-run with --allow-major to apply.`,
       );
       continue;
     }
@@ -139,6 +147,28 @@ export async function getDirectDepCatalogBumps(
     }
   }
   return { bumps, tiers };
+}
+
+function advisoryAppliesToCurrent(
+  current: string | undefined,
+  vulnerableRange: string | undefined,
+): boolean {
+  if (!current || !vulnerableRange?.trim()) return true;
+  const currentClean = semver.coerce(current)?.version;
+  if (!currentClean) return true;
+
+  const range = normalizeAuditRange(vulnerableRange);
+  if (!range) return true;
+  return semver.satisfies(currentClean, range, { includePrerelease: false });
+}
+
+function normalizeAuditRange(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const candidate = trimmed.includes('||') ? trimmed : trimmed.replace(/\s*,\s*/g, ' || ');
+  if (semver.validRange(candidate)) return candidate;
+  if (semver.validRange(trimmed)) return trimmed;
+  return null;
 }
 
 /**
@@ -255,7 +285,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
   if (updates.size === 0) return current;
 
   const priorVersions = getCatalogVersions(current);
-  logger.detail('Promoting direct-dep audit fixes into catalog:');
+  logger.detail('Promoting direct-dependency audit fixes into the catalog:');
   for (const [k, v] of updates) {
     const annotation = majorBumpAnnotation(priorVersions.get(k), v);
     logger.bullet(`${k} -> ${v}${annotation}`);
@@ -305,9 +335,11 @@ export function syncPackageJsonOverridesIntoCatalog(
   const body = pjText.slice(bodyStart, end);
 
   const catalogNames = getCatalogNames(desiredYaml);
+  const catalogVersions = getCatalogVersions(desiredYaml);
   const promotions = new Map<string, string>();
   const keptLines: string[] = [];
   const entryRe = /^([ \t]*)"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(,?)\s*$/;
+  let skippedPlainForCatalog = 0;
 
   for (const line of body.split(/\r?\n/)) {
     const m = entryRe.exec(line);
@@ -316,34 +348,66 @@ export function syncPackageJsonOverridesIntoCatalog(
       const val = m[3] ?? '';
       const bare = getBarePackageName(key);
       if (catalogNames.has(bare)) {
-        const version = getConcreteVersion(val);
-        if (version) {
-          const existing = promotions.get(bare);
-          if (!existing || compareSemVer(version, existing) > 0) {
-            promotions.set(bare, version);
+        // Only promote qualified overrides (`name@selector`) where the current
+        // catalog version matches the selector range. Bare keys (`name`) do
+        // not carry vulnerable-range context and can cause cross-range bumps.
+        if (!isPlainPackageName(key)) {
+          const keyRange = key.slice(bare.length + 1); // strip `name@`
+          const catalogVer = catalogVersions.get(bare);
+          const coercedCatalog = catalogVer ? semver.coerce(catalogVer)?.version : undefined;
+          if (
+            coercedCatalog &&
+            semver.validRange(keyRange) &&
+            semver.satisfies(coercedCatalog, keyRange)
+          ) {
+            const minVer = semver.minVersion(val);
+            if (minVer) {
+              const existing = promotions.get(bare);
+              const base = existing ?? catalogVer ?? '';
+              if (!base || compareSemVer(minVer.version, base) > 0) {
+                promotions.set(bare, minVer.version);
+                continue;
+              }
+            }
           }
-          continue;
+        } else {
+          skippedPlainForCatalog++;
         }
       }
     }
     keptLines.push(line);
   }
 
-  if (promotions.size === 0) return desiredYaml;
-
-  const priorVersions = getCatalogVersions(desiredYaml);
-  logger.detail('Promoting direct-dep audit fixes from package.json into catalog:');
-  for (const [k, v] of promotions) {
-    const annotation = majorBumpAnnotation(priorVersions.get(k), v);
-    logger.bullet(`${k} -> ${v}${annotation}`);
+  if (skippedPlainForCatalog > 0) {
+    logger.detail(
+      `Skipped ${skippedPlainForCatalog} plain package.json override(s) for catalog packages because they do not include a vulnerable selector range.`,
+    );
   }
-  warnOnMajorPromotions(promotions, priorVersions, logger);
 
-  const newYaml = applyCatalogUpdates(desiredYaml, promotions);
-  state.saveWorkspaceYaml(newYaml);
+  const optimizedKeptLines = collapseRedundantQualifiedPackageJsonOverrides(keptLines);
+  const keptChanged = optimizedKeptLines.length !== keptLines.length;
+
+  if (promotions.size === 0 && !keptChanged) return desiredYaml;
+
+  let newYaml = desiredYaml;
+  if (promotions.size > 0) {
+    const priorVersions = getCatalogVersions(desiredYaml);
+    logger.detail('Promoting direct-dependency audit fixes from package.json into the catalog:');
+    for (const [k, v] of promotions) {
+      const annotation = majorBumpAnnotation(priorVersions.get(k), v);
+      logger.bullet(`${k} -> ${v}${annotation}`);
+    }
+    warnOnMajorPromotions(promotions, priorVersions, logger);
+
+    newYaml = applyCatalogUpdates(desiredYaml, promotions);
+    state.saveWorkspaceYaml(newYaml);
+  }
+  if (keptChanged) {
+    logger.detail('Collapsed redundant qualified package.json overrides for clarity.');
+  }
 
   // Trim leading/trailing blank lines from the kept entries.
-  const cleaned = [...keptLines];
+  const cleaned = [...optimizedKeptLines];
   while (cleaned.length > 0 && !cleaned[0]!.trim()) cleaned.shift();
   while (cleaned.length > 0 && !cleaned[cleaned.length - 1]!.trim()) cleaned.pop();
 
@@ -378,6 +442,130 @@ export function syncPackageJsonOverridesIntoCatalog(
   return newYaml;
 }
 
+function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly string[]): string[] {
+  const entryRe = /^([ \t]*)"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(,?)\s*$/;
+  type Candidate = {
+    idx: number;
+    bare: string;
+    range: string;
+    keyRange: string;
+    val: string;
+    originalVal: string;
+    indent: string;
+  };
+  const candidates: Candidate[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const m = entryRe.exec(line);
+    if (!m) continue;
+    const indent = m[1] ?? '';
+    const key = m[2] ?? '';
+    const val = m[3] ?? '';
+    if (isPlainPackageName(key)) continue;
+
+    const bare = getBarePackageName(key);
+    const keyRange = key.slice(bare.length + 1);
+    const normalized = normalizeAuditRange(keyRange);
+    if (!normalized) continue;
+    candidates.push({
+      idx: i,
+      bare,
+      range: normalized,
+      keyRange,
+      val,
+      originalVal: val,
+      indent,
+    });
+  }
+
+  if (candidates.length < 2) return [...lines];
+
+  const drop = new Set<number>();
+  const byIndex = new Map<number, Candidate>();
+  for (const c of candidates) byIndex.set(c.idx, c);
+
+  const groups = new Map<string, Candidate[]>();
+  for (const c of candidates) {
+    const k = c.bare;
+    const arr = groups.get(k);
+    if (arr) arr.push(c);
+    else groups.set(k, [c]);
+  }
+
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i++) {
+      const a = group[i];
+      if (!a || drop.has(a.idx)) continue;
+      for (let j = i + 1; j < group.length; j++) {
+        const b = group[j];
+        if (!b || drop.has(b.idx)) continue;
+        let aInB: boolean;
+        let bInA: boolean;
+        try {
+          aInB = semver.subset(a.range, b.range);
+          bInA = semver.subset(b.range, a.range);
+        } catch {
+          continue;
+        }
+        if (aInB && bInA) {
+          const merged = strongestFixRange(a.val, b.val);
+          if (!merged) continue;
+          a.val = merged;
+          // Equivalent selectors; keep first occurrence for stable output.
+          drop.add(b.idx);
+          continue;
+        }
+        if (aInB) {
+          const merged = strongestFixRange(a.val, b.val);
+          if (!merged) continue;
+          b.val = merged;
+          // a is narrower than b; drop a and keep broader b with strongest fix.
+          drop.add(a.idx);
+          break;
+        }
+        if (bInA) {
+          const merged = strongestFixRange(a.val, b.val);
+          if (!merged) continue;
+          a.val = merged;
+          // b is narrower than a; drop b and keep broader a with strongest fix.
+          drop.add(b.idx);
+        }
+      }
+    }
+  }
+
+  const changedValues = new Set<number>();
+  for (const c of candidates) {
+    if (c.val !== c.originalVal) changedValues.add(c.idx);
+  }
+
+  if (drop.size === 0 && changedValues.size === 0) return [...lines];
+
+  const out: string[] = [];
+  for (let idx = 0; idx < lines.length; idx++) {
+    if (drop.has(idx)) continue;
+    const candidate = byIndex.get(idx);
+    if (candidate && changedValues.has(idx)) {
+      const rewritten = `${candidate.indent}"${candidate.bare}@${candidate.keyRange}": "${candidate.val}",`;
+      out.push(rewritten);
+      continue;
+    }
+    out.push(lines[idx] ?? '');
+  }
+  return out;
+}
+
+function strongestFixRange(a: string, b: string): string | null {
+  if (a === b) return a;
+
+  const minA = semver.minVersion(a)?.version;
+  const minB = semver.minVersion(b)?.version;
+  if (!minA || !minB) return null;
+
+  return compareSemVer(minA, minB) >= 0 ? `>=${minA}` : `>=${minB}`;
+}
+
 function majorBumpAnnotation(prior: string | undefined, next: string): string {
   if (!prior) return '';
   try {
@@ -401,7 +589,9 @@ function warnOnMajorPromotions(
     const a = semver.coerce(prior)?.version;
     const b = semver.coerce(v)?.version;
     if (a && b && semver.major(b) > semver.major(a)) {
-      logger.warn(`Major bump promoted for ${k}: ${prior} -> ${v}; review for breaking changes.`);
+      logger.warn(
+        `Major bump promoted for ${k}: ${prior} -> ${v}. Review release notes for potential breaking changes.`,
+      );
     }
   }
 }

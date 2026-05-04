@@ -75,7 +75,7 @@ export class WorkspaceState {
     if (!this.desiredWorkspaceYaml) return false;
     const current = this.readWorkspaceYaml();
     if (current !== this.desiredWorkspaceYaml) {
-      logger.detail('Restoring pnpm-workspace.yaml (pnpm modified it)');
+      logger.detail('Restored pnpm-workspace.yaml after pnpm rewrote it.');
       this.saveWorkspaceYaml(this.desiredWorkspaceYaml);
       return true;
     }

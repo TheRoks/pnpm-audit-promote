@@ -66,4 +66,9 @@ describe('removeJsonProperty', () => {
     const text = '{ "a": 1 }';
     expect(removeJsonProperty(text, 'z')).toBe(text);
   });
+
+  it('returns input unchanged for malformed unterminated string values', () => {
+    const text = '{ "a": "unterminated';
+    expect(removeJsonProperty(text, 'a')).toBe(text);
+  });
 });

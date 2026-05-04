@@ -103,7 +103,7 @@ describe('cleanup helpers', () => {
 
     const writes = writeSpy.mock.calls.map((c) => String(c[0]));
     expect(writes.some((w) => /Removing node_modules/.test(w))).toBe(true);
-    expect(writes.some((w) => /\x1b\[2K$/.test(w))).toBe(true);
+    expect(writes.some((w) => w.endsWith('\u001b[2K'))).toBe(true);
   });
 
   it('handles no node_modules directories', () => {

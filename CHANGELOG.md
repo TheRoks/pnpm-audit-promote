@@ -1,5 +1,12 @@
 # pnpm-audit-promote
 
+## [1.3.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.2.0...v1.3.0) (2026-05-04)
+
+
+### Features
+
+* **summary:** add summary collector and terminal renderer for dependency changes ([#18](https://github.com/TheRoks/pnpm-audit-promote/issues/18)) ([b201ec4](https://github.com/TheRoks/pnpm-audit-promote/commit/b201ec429542ad930866b9f2743163587d8d7b47))
+
 ## [1.2.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.1.0...v1.2.0) (2026-05-04)
 
 

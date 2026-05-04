@@ -1,5 +1,12 @@
 # pnpm-audit-promote
 
+## [1.2.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.1.0...v1.2.0) (2026-05-04)
+
+
+### Features
+
+* enhance logging clarity and add comprehensive tests for modules ([#16](https://github.com/TheRoks/pnpm-audit-promote/issues/16)) ([2e50ff9](https://github.com/TheRoks/pnpm-audit-promote/commit/2e50ff93adb4b211b8953667907e60e086580d07))
+
 ## [1.1.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.0.0...v1.1.0) (2026-05-01)
 
 

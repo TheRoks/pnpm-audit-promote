@@ -55,7 +55,7 @@ describe('syncAuditOverridesIntoCatalog', () => {
 });
 
 describe('syncPackageJsonOverridesIntoCatalog', () => {
-  it('promotes catalog-eligible package.json overrides into the catalog', () => {
+  it('does not promote plain package.json overrides for catalog packages', () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     const pkg = JSON.stringify(
       {
@@ -73,26 +73,88 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     );
     const state = writeWorkspace(yaml, pkg);
     const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
-    expect(out).toContain("react: '18.3.1'");
+    expect(out).toContain("react: '18.2.0'");
     const newPkg = fs.readFileSync(path.join(tmp, 'package.json'), 'utf8');
-    expect(newPkg).not.toMatch(/"react"/);
+    expect(newPkg).toMatch(/"react"/);
     expect(newPkg).toContain('unrelated-pkg');
   });
 
-  it('removes empty pnpm.overrides block when fully promoted', () => {
-    const yaml = "catalog:\n  react: '18.2.0'\n";
+  it('promotes qualified package.json overrides that match current catalog range', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
     const pkg = JSON.stringify(
       {
         name: 'root',
-        pnpm: { overrides: { react: '18.3.1' } },
+        pnpm: { overrides: { 'vite@<=6.4.1': '>=6.4.2' } },
       },
       null,
       2,
     );
     const state = writeWorkspace(yaml, pkg);
-    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
-    const parsed = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8'));
-    expect(parsed.pnpm?.overrides).toBeUndefined();
+    const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    expect(out).toContain("vite: '6.4.2'");
+
+    const newPkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: { overrides?: Record<string, string> };
+    };
+    expect(newPkg.pnpm?.overrides).toBeUndefined();
+  });
+
+  it('collapses redundant qualified package.json overrides with the same fix', () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: {
+          overrides: {
+            'vite@>=7.0.0 <=7.3.1': '>=7.3.2',
+            'vite@>=7.1.0 <=7.3.1': '>=7.3.2',
+            'rollup@>=4.0.0 <=4.58.0': '>=4.59.0',
+          },
+        },
+      },
+      null,
+      2,
+    );
+
+    const state = writeWorkspace(yaml, pkg);
+    const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    expect(out).toBe(yaml); // no catalog promotions here
+
+    const parsed = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: { overrides?: Record<string, string> };
+    };
+    const overrides = parsed.pnpm?.overrides ?? {};
+    expect(overrides['vite@>=7.0.0 <=7.3.1']).toBe('>=7.3.2');
+    expect(overrides['vite@>=7.1.0 <=7.3.1']).toBeUndefined();
+    expect(overrides['rollup@>=4.0.0 <=4.58.0']).toBe('>=4.59.0');
+  });
+
+  it('collapses subset selectors and keeps the stricter fix floor', () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: {
+          overrides: {
+            'webpack@>=5.49.0 <=5.104.0': '>=5.104.1',
+            'webpack@>=5.49.0 <5.104.0': '>=5.104.0',
+          },
+        },
+      },
+      null,
+      2,
+    );
+
+    const state = writeWorkspace(yaml, pkg);
+    const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    expect(out).toBe(yaml); // no catalog promotions here
+
+    const parsed = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: { overrides?: Record<string, string> };
+    };
+    const overrides = parsed.pnpm?.overrides ?? {};
+    expect(overrides['webpack@>=5.49.0 <=5.104.0']).toBe('>=5.104.1');
+    expect(overrides['webpack@>=5.49.0 <5.104.0']).toBeUndefined();
   });
 
   it('returns desired yaml unchanged when no overrides in package.json', () => {

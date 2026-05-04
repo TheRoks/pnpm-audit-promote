@@ -1,8 +1,16 @@
 /**
  * Minimal textual edits to JSON to preserve formatting, property order, and
- * trailing whitespace. Mirrors the PowerShell helpers used by the original
- * script.
+ * trailing whitespace.
+ *
+ * `findMatchingBrace` remains a hand-rolled scanner because the audit
+ * promotion code needs to slice the *body* of the `overrides` object to
+ * iterate it line by line, and no off-the-shelf library exposes that.
+ *
+ * `removeJsonProperty` delegates to `jsonc-parser`'s `modify` + `applyEdits`,
+ * which produces minimal, formatting-preserving edits and correctly handles
+ * the leading/trailing comma cases that the previous regex had to special-case.
  */
+import { applyEdits, modify } from 'jsonc-parser';
 
 /**
  * Given the index of an opening `{` or `[`, return the index of the matching
@@ -40,63 +48,21 @@ export function findMatchingBrace(text: string, openIndex: number): number {
 }
 
 /**
- * Remove the JSON property `"name": <value>` (object/array/string/literal)
- * along with one neighboring comma. Returns the modified text, or the original
- * text if the property does not exist.
+ * Remove a JSON property at the given path. Returns the modified text, or
+ * the original text if the property does not exist. The path is variadic:
+ * pass one segment for a top-level property, multiple for nested ones
+ * (e.g. `removeJsonProperty(text, 'pnpm', 'overrides')`).
  */
-export function removeJsonProperty(text: string, name: string): string {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const keyRe = new RegExp(`"${escaped}"\\s*:\\s*`);
-  const km = keyRe.exec(text);
-  if (!km) return text;
-
-  const valStart = km.index + km[0].length;
-  if (valStart >= text.length) return text;
-
-  let valEnd = -1;
-  const c = text[valStart];
-  if (c === '{' || c === '[') {
-    const close = findMatchingBrace(text, valStart);
-    if (close < 0) return text;
-    valEnd = close + 1;
-  } else if (c === '"') {
-    let i = valStart + 1;
-    let escape = false;
-    while (i < text.length) {
-      const ch = text[i];
-      if (escape) escape = false;
-      else if (ch === '\\') escape = true;
-      else if (ch === '"') {
-        valEnd = i + 1;
-        break;
-      }
-      i++;
-    }
-    if (valEnd < 0) return text;
-  } else {
-    let i = valStart;
-    while (i < text.length && !/[,}\]\s]/.test(text[i] ?? '')) i++;
-    valEnd = i;
+export function removeJsonProperty(text: string, ...jsonPath: string[]): string {
+  if (jsonPath.length === 0) return text;
+  let edits;
+  try {
+    edits = modify(text, jsonPath, undefined, {});
+  } catch {
+    // jsonc-parser throws when an intermediate path segment is missing.
+    // Treat that as a no-op rather than propagating the error.
+    return text;
   }
-
-  let start = km.index;
-  let end = valEnd;
-
-  const trailing = /^[ \t]*,/.exec(text.slice(end));
-  if (trailing) {
-    end += trailing[0].length;
-  } else {
-    // No trailing comma: this property was the last in its parent. We must
-    // also strip the leading comma (and any whitespace, including newlines,
-    // between that comma and our key) so the parent stays valid JSON.
-    const leading = /,\s*$/.exec(text.slice(0, start));
-    if (leading) start -= leading[0].length;
-  }
-
-  const lead = /[ \t]*$/.exec(text.slice(0, start));
-  if (lead && lead[0].length > 0) start -= lead[0].length;
-  const lb = /^\r?\n/.exec(text.slice(end));
-  if (lb) end += lb[0].length;
-
-  return text.slice(0, start) + text.slice(end);
+  if (edits.length === 0) return text;
+  return applyEdits(text, edits);
 }

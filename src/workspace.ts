@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import picomatch from 'picomatch';
+import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger.js';
 import { PRUNED_DIR_NAMES } from './fsWalk.js';
 
@@ -85,24 +87,26 @@ export class WorkspaceState {
 
 /** Extract the `packages:` list from pnpm-workspace.yaml text. */
 function extractYamlPackagesGlobs(yaml: string): string[] | null {
-  const blockMatch = /^packages:\s*\r?\n((?:[ \t]+-[ \t]+.*\r?\n?)*)/m.exec(yaml);
-  if (!blockMatch?.[1]) return null;
-  const globs: string[] = [];
-  for (const line of blockMatch[1].split(/\r?\n/)) {
-    const m = /^[ \t]+-[ \t]+['"]?(.+?)['"]?\s*$/.exec(line);
-    if (m?.[1]) globs.push(m[1].trim());
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(yaml);
+  } catch {
+    return null;
   }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const pkgs = (parsed as { packages?: unknown }).packages;
+  if (!Array.isArray(pkgs)) return null;
+  const globs = pkgs.filter((g): g is string => typeof g === 'string').map((g) => g.trim());
   return globs.length > 0 ? globs : null;
 }
 
 /** Returns true when the normalized relative path matches the workspace glob. */
 function matchesWorkspaceGlob(relPath: string, pattern: string): boolean {
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '__GLOBSTAR__')
-    .replace(/\*/g, '[^/]+')
-    .replace(/__GLOBSTAR__/g, '.+');
-  return new RegExp(`^${regexStr}$`).test(relPath);
+  // `picomatch` understands the full pnpm/npm-workspaces glob dialect:
+  // `**`, `*`, `?`, `{a,b}`, character classes, and escaped specials. The
+  // previous hand-rolled regex translator did not support brace expansion
+  // and could mismatch nested directories.
+  return picomatch.isMatch(relPath, pattern, { dot: true });
 }
 
 /**

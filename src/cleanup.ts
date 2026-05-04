@@ -5,12 +5,29 @@ import { isDetailLoggingEnabled, type Logger } from './logger.js';
 import type { WorkspaceState } from './workspace.js';
 import { resolveWorkspacePackageDirs } from './workspace.js';
 import { findNodeModulesFolders, findWorkspaceFiles } from './fsWalk.js';
-import { findMatchingBrace, removeJsonProperty } from './jsonEdit.js';
+import { removeJsonProperty } from './jsonEdit.js';
 import { collapseBlankLines } from './catalog.js';
+
+/**
+ * Defense-in-depth: refuse to delete any path that does not resolve under the
+ * workspace root. Guards against accidental misuse of the cleanup helpers
+ * with externally-supplied paths.
+ */
+function assertWithinWorkspace(state: WorkspaceState, target: string): void {
+  const resolved = path.resolve(target);
+  const root = path.resolve(state.workspaceRoot);
+  const rel = path.relative(root, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(
+      `Refusing to delete '${resolved}': path is not contained within workspace root '${root}'.`,
+    );
+  }
+}
 
 export function removePnpmLockFile(state: WorkspaceState, logger: Logger): void {
   logger.step('Remove pnpm lockfile');
   if (fs.existsSync(state.lockFile)) {
+    assertWithinWorkspace(state, state.lockFile);
     if (state.dryRun) {
       logger.detail(`Dry-run: would remove ${state.lockFile}`);
     } else {
@@ -43,6 +60,7 @@ export function removeNodeModulesFolders(state: WorkspaceState, logger: Logger):
       logger.detail(`Dry-run: would remove ${dir}`);
       continue;
     }
+    assertWithinWorkspace(state, dir);
     processedCount += 1;
     spinner.update(processedCount);
     // On Windows, `rd /s /q` is dramatically faster than recursive rm for
@@ -122,20 +140,36 @@ export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger
     if (!text.includes('"overrides"')) continue;
 
     const original = text;
-    const pnpmStart = /"pnpm"\s*:\s*\{/.exec(text);
-    if (!pnpmStart) continue;
 
-    const pnpmOpen = pnpmStart.index + pnpmStart[0].length - 1;
-    const pnpmClose = findMatchingBrace(text, pnpmOpen);
-    if (pnpmClose <= 0) continue;
+    // Surgically remove `pnpm.overrides` (and an empty `pnpm` parent if it
+    // becomes vacant) using jsonc-parser. This preserves whitespace,
+    // property order, and trailing newline byte-for-byte.
+    let parsed: { pnpm?: { overrides?: unknown } } | null;
+    try {
+      parsed = JSON.parse(text) as { pnpm?: { overrides?: unknown } };
+    } catch (e) {
+      logger.warn(`Skipped ${pjPath}: pre-edit JSON was invalid (${(e as Error).message}).`);
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || !parsed.pnpm || !('overrides' in parsed.pnpm)) {
+      continue;
+    }
 
-    const pnpmBody = text.slice(pnpmOpen + 1, pnpmClose);
-    const cleanedBody = removeJsonProperty(pnpmBody, 'overrides');
-    if (cleanedBody === pnpmBody) continue;
+    text = removeJsonProperty(text, 'pnpm', 'overrides');
 
-    text = text.slice(0, pnpmOpen + 1) + cleanedBody + text.slice(pnpmClose);
-    if (/^\s*$/.test(cleanedBody)) {
-      text = removeJsonProperty(text, 'pnpm');
+    // If the pnpm block is now empty (no remaining keys), drop it too.
+    try {
+      const reparsed = JSON.parse(text) as { pnpm?: Record<string, unknown> };
+      if (
+        reparsed.pnpm &&
+        typeof reparsed.pnpm === 'object' &&
+        Object.keys(reparsed.pnpm).length === 0
+      ) {
+        text = removeJsonProperty(text, 'pnpm');
+      }
+    } catch (e) {
+      logger.warn(`Skipped ${pjPath}: post-edit JSON was invalid (${(e as Error).message}).`);
+      continue;
     }
 
     if (text === original) continue;

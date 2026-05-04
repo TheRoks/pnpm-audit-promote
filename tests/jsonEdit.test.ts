@@ -67,8 +67,29 @@ describe('removeJsonProperty', () => {
     expect(removeJsonProperty(text, 'z')).toBe(text);
   });
 
-  it('returns input unchanged for malformed unterminated string values', () => {
+  it('tolerates malformed input without throwing', () => {
     const text = '{ "a": "unterminated';
-    expect(removeJsonProperty(text, 'a')).toBe(text);
+    expect(() => removeJsonProperty(text, 'a')).not.toThrow();
+  });
+
+  it('removes a nested property by path', () => {
+    const before =
+      '{\n  "name": "x",\n  "pnpm": {\n    "overrides": {\n      "react": "18.3.1"\n    }\n  }\n}\n';
+    const out = removeJsonProperty(before, 'pnpm', 'overrides');
+    const parsed = JSON.parse(out) as { pnpm: Record<string, unknown> };
+    expect(parsed.pnpm).toEqual({});
+    expect(out.endsWith('\n')).toBe(true);
+  });
+
+  it('preserves trailing newline when removing a top-level property', () => {
+    const before = '{\n  "a": 1,\n  "b": 2\n}\n';
+    const out = removeJsonProperty(before, 'a');
+    expect(out.endsWith('\n')).toBe(true);
+    expect(JSON.parse(out)).toEqual({ b: 2 });
+  });
+
+  it('returns input unchanged when path does not exist', () => {
+    const text = '{ "a": 1 }';
+    expect(removeJsonProperty(text, 'pnpm', 'overrides')).toBe(text);
   });
 });

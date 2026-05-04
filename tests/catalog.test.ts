@@ -3,6 +3,7 @@ import {
   applyCatalogUpdates,
   collapseBlankLines,
   getCatalogNames,
+  getCatalogVersions,
   CATALOG_BLOCK_PATTERN,
   OVERRIDES_BLOCK_PATTERN,
 } from '../src/catalog.js';
@@ -103,5 +104,38 @@ describe('block patterns', () => {
 
   it('OVERRIDES_BLOCK_PATTERN matches overrides block', () => {
     expect(OVERRIDES_BLOCK_PATTERN.exec(SAMPLE_LF)).toBeTruthy();
+  });
+});
+
+describe('AST-based catalog reads', () => {
+  it('parses catalog entries with inline comments', () => {
+    const yaml = "catalog:\n  react: '18.2.0' # pinned for compatibility\n  lodash: 4.17.21\n";
+    const versions = getCatalogVersions(yaml);
+    expect(versions.get('react')).toBe('18.2.0');
+    expect(versions.get('lodash')).toBe('4.17.21');
+  });
+
+  it('parses catalog entries with anchors and aliases', () => {
+    const yaml = "catalog:\n  react: &reactVer '18.2.0'\n  react-dom: *reactVer\n";
+    const versions = getCatalogVersions(yaml);
+    expect(versions.get('react')).toBe('18.2.0');
+    // Aliased values should resolve to the same concrete version.
+    expect(versions.get('react-dom')).toBe('18.2.0');
+  });
+
+  it('omits $ref placeholder values from getCatalogVersions but keeps names', () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n  ghost: $package\n";
+    expect(getCatalogNames(yaml).has('ghost')).toBe(true);
+    expect(getCatalogVersions(yaml).has('ghost')).toBe(false);
+  });
+
+  it('returns empty results for unparseable yaml', () => {
+    const yaml = 'catalog: { unterminated';
+    expect(getCatalogNames(yaml).size).toBe(0);
+    expect(getCatalogVersions(yaml).size).toBe(0);
+  });
+
+  it('returns empty results when catalog key is absent', () => {
+    expect(getCatalogNames("packages:\n  - 'apps/*'\n").size).toBe(0);
   });
 });

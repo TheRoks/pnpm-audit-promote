@@ -140,7 +140,7 @@ export function selectSafeBump(
  * Handles common shapes like `>=1.2.3`, `>=1.2.3 <2.0.0`, `1.x`, and
  * comma-separated alternates by converting them to `||` form.
  */
-function normalizeRange(input: string): string | null {
+export function normalizeRange(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
   // Some advisories use comma as alternation separator.

@@ -1,8 +1,10 @@
 /**
  * Regex-based pnpm-workspace.yaml manipulation that preserves formatting,
- * ordering, and quoting style. Matches the PowerShell helpers from the
- * original script.
+ * ordering, and quoting style. Reads use the `yaml` AST for robustness
+ * (anchors, comments, nested mappings); writes stay regex-based so the
+ * file's original formatting is preserved byte-for-byte.
  */
+import { parseDocument } from 'yaml';
 
 export const OVERRIDES_BLOCK_PATTERN = /^(overrides:[ \t]*\r?\n((?:[ \t]+\S.*\r?\n?)+))/m;
 
@@ -14,20 +16,40 @@ export const CATALOG_BLOCK_PATTERN = /^(catalog:[ \t]*\r?\n((?:[ \t]+\S.*\r?\n?)
  */
 export const YAML_KEY_PATTERN = /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:/;
 
+function readCatalogMap(yaml: string): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  let doc;
+  try {
+    doc = parseDocument(yaml, { keepSourceTokens: false });
+  } catch {
+    return result;
+  }
+  // Bail on parse errors so malformed input never produces partial results.
+  if (doc.errors.length > 0) return result;
+
+  // `toJS` resolves aliases and produces plain JS values, which is what we
+  // want for read-only inspection.
+  let raw: unknown;
+  try {
+    raw = doc.toJS();
+  } catch {
+    return result;
+  }
+  if (typeof raw !== 'object' || raw === null) return result;
+  const catalog = (raw as { catalog?: unknown }).catalog;
+  if (typeof catalog !== 'object' || catalog === null) return result;
+
+  for (const [name, value] of Object.entries(catalog as Record<string, unknown>)) {
+    if (typeof value === 'string') result.set(name, value);
+    else if (typeof value === 'number') result.set(name, String(value));
+    else result.set(name, null);
+  }
+  return result;
+}
+
 /** Get catalog package names from the given workspace yaml content. */
 export function getCatalogNames(yaml: string): Set<string> {
-  const names = new Set<string>();
-  const cm = CATALOG_BLOCK_PATTERN.exec(yaml);
-  if (!cm) return names;
-
-  const body = cm[2] ?? '';
-  for (const line of body.split(/\r?\n/)) {
-    const m = YAML_KEY_PATTERN.exec(line);
-    if (!m) continue;
-    const name = m[1] ?? m[2] ?? m[3];
-    if (name) names.add(name);
-  }
-  return names;
+  return new Set(readCatalogMap(yaml).keys());
 }
 
 /**
@@ -37,18 +59,8 @@ export function getCatalogNames(yaml: string): Set<string> {
  */
 export function getCatalogVersions(yaml: string): Map<string, string> {
   const versions = new Map<string, string>();
-  const cm = CATALOG_BLOCK_PATTERN.exec(yaml);
-  if (!cm) return versions;
-
-  const body = cm[2] ?? '';
-  const entryPattern =
-    /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s*$/;
-  for (const line of body.split(/\r?\n/)) {
-    const m = entryPattern.exec(line);
-    if (!m) continue;
-    const name = m[1] ?? m[2] ?? m[3];
-    const raw = m[4] ?? m[5] ?? m[6] ?? '';
-    if (!name) continue;
+  for (const [name, raw] of readCatalogMap(yaml)) {
+    if (!raw) continue;
     if (raw.startsWith('$')) continue;
     const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(raw)?.[1];
     if (concrete) versions.set(name, concrete);

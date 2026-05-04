@@ -48,12 +48,11 @@ helper modules. `PnpmRunner` is injectable so tests never shell out to real pnpm
 - Temp dirs are cleaned up in `afterEach` with `fs.rmSync(tmp, { recursive: true })`
 - Inject `silentLogger` when constructing `WorkspaceState` in tests
 - Inject a mock `PnpmRunner` via `options.pnpm` to avoid shelling out
-- Coverage thresholds: 65% statements/branches/lines, 70% functions
-  (`src/cli.ts`, `src/version.ts`, `src/index.ts` are excluded)
+- Coverage thresholds: 85% statements/lines, 75% branches, 90% functions
+  (`src/cli.ts`, `src/index.ts` are excluded)
 
 ## Contributing
 
-- `src/version.ts` is auto-generated — never edit it manually
 - See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow
 
 ## Existing agent customizations

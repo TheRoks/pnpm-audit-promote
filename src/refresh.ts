@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import { consoleLogger, isVerboseLoggingEnabled, type Logger } from './logger.js';
 import { WorkspaceState } from './workspace.js';
@@ -14,6 +15,16 @@ import {
   syncPackageJsonOverridesIntoCatalog,
 } from './auditSync.js';
 import { applyCatalogUpdates } from './catalog.js';
+import {
+  extractAdvisories,
+  readAllOverrides,
+  readCatalogSnapshot,
+  renderTerminalSummary,
+  safeReadFile,
+  type AdvisorySummary,
+  type RunSummaryData,
+} from './summary.js';
+import pkg from '../package.json' with { type: 'json' };
 
 export interface RefreshOptions {
   /** Workspace root containing pnpm-workspace.yaml. */
@@ -39,6 +50,15 @@ export interface RefreshOptions {
    * warning). Defaults to true.
    */
   allowMajor?: boolean;
+  /**
+   * When true (default), prints a terminal-pretty summary at the end
+   * describing direct/transitive package changes and resolved CVEs.
+   * A plain-text (no ANSI) copy is also written to `summaryFile` when
+   * provided.
+   */
+  summary?: boolean;
+  /** Optional path to also write the plain-text summary to. */
+  summaryFile?: string;
 }
 
 /**
@@ -97,6 +117,31 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
     return;
   }
 
+  // Capture the original state BEFORE any cleanup mutates files. Used by
+  // the run-summary at the end.
+  const originalYaml = state.desiredWorkspaceYaml;
+  const originalPjText = safeReadFile(state.rootPackageJson);
+  const originalCatalog = readCatalogSnapshot(originalYaml);
+  const originalOverrides = readAllOverrides(originalYaml, originalPjText);
+  const workspaceName = readPackageJsonName(originalPjText);
+
+  // Capture the TRUE initial vulnerability state — i.e. the audit result
+  // with any existing overrides still applied. If we ran this after the
+  // cleanup phase, every existing override would be stripped first and
+  // its masked vulnerabilities would resurface, only to be "fixed" again
+  // when audit-fix re-adds the same overrides. That would inflate the
+  // "vulnerabilities fixed" count with non-changes.
+  let initialAdvisories: AdvisorySummary[] = [];
+  if (!options.skipAudit && !dryRun) {
+    try {
+      const { stdout } = await pnpm.capture(['audit', '--json']);
+      initialAdvisories = extractAdvisories(stdout);
+    } catch {
+      // Best-effort: a missing lockfile or other audit failure leaves the
+      // initial set empty rather than aborting the whole run.
+    }
+  }
+
   // Cleanup phase ---------------------------------------------------------
   removePnpmLockFile(state, progressLogger);
   removeNodeModulesFolders(state, progressLogger);
@@ -116,7 +161,19 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
 
   // Audit phase -----------------------------------------------------------
   if (!options.skipAudit) {
-    await preAuditCatalogBump(state, pnpm, progressLogger, options.allowMajor ?? true);
+    // Capture a post-cleanup audit JSON and share it with the pre-audit
+    // catalog bump (which needs the unmasked vulnerability set to decide
+    // which direct deps to bump). This is *separate* from the initial
+    // audit captured above for the summary.
+    const postCleanupAuditStdout = dryRun ? '' : (await pnpm.capture(['audit', '--json'])).stdout;
+
+    await preAuditCatalogBump(
+      state,
+      pnpm,
+      progressLogger,
+      options.allowMajor ?? true,
+      postCleanupAuditStdout,
+    );
     await auditFix(state, pnpm, progressLogger);
 
     progressLogger.step('Reinstall dependencies (post-audit reconciliation)');
@@ -131,6 +188,20 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
   } else {
     logger.detail('Skipped audit and catalog promotion (--no-audit).');
   }
+
+  // Summary phase ---------------------------------------------------------
+  await emitRunSummary({
+    state,
+    pnpm,
+    logger,
+    options,
+    dryRun,
+    durationMs: Date.now() - startedAt,
+    workspaceName,
+    originalCatalog,
+    originalOverrides,
+    initialAdvisories,
+  });
 
   logger.raw('');
   const totalElapsed = formatDuration(Date.now() - startedAt);
@@ -166,9 +237,13 @@ async function preAuditCatalogBump(
   pnpm: PnpmRunner,
   logger: Logger,
   allowMajor: boolean,
+  auditJsonStdout: string,
 ): Promise<void> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
-  const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, { allowMajor });
+  const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
+    allowMajor,
+    auditJsonStdout,
+  });
   logger.step('Reinstall dependencies after catalog updates');
   if (bumps.size === 0) {
     logger.detail('No vulnerable direct dependencies detected in catalog-managed packages.');
@@ -225,4 +300,76 @@ async function confirmDestructive(force: boolean, dryRun: boolean): Promise<bool
   });
   rl.close();
   return /^(y|yes)$/i.test(answer.trim());
+}
+
+interface EmitRunSummaryArgs {
+  state: WorkspaceState;
+  pnpm: PnpmRunner;
+  logger: Logger;
+  options: RefreshOptions;
+  dryRun: boolean;
+  durationMs: number;
+  workspaceName: string | undefined;
+  originalCatalog: ReadonlyMap<string, string>;
+  originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
+  initialAdvisories: readonly AdvisorySummary[];
+}
+
+async function emitRunSummary(args: EmitRunSummaryArgs): Promise<void> {
+  const { state, pnpm, logger, options, dryRun } = args;
+  if (options.summary === false) return;
+
+  const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
+  const finalPjText = safeReadFile(state.rootPackageJson);
+  const finalCatalog = readCatalogSnapshot(finalYaml);
+  const finalOverrides = readAllOverrides(finalYaml, finalPjText);
+
+  let finalAdvisories: AdvisorySummary[] = [];
+  if (!options.skipAudit && !dryRun) {
+    try {
+      const { stdout } = await pnpm.capture(['audit', '--json']);
+      finalAdvisories = extractAdvisories(stdout);
+    } catch {
+      // Best-effort: leave the remaining-vuln list empty rather than fail the run.
+    }
+  }
+
+  const summary: RunSummaryData = {
+    workspaceRoot: state.workspaceRoot,
+    workspaceName: args.workspaceName,
+    toolVersion: pkg.version,
+    durationMs: args.durationMs,
+    dryRun,
+    auditSkipped: Boolean(options.skipAudit),
+    originalCatalog: args.originalCatalog,
+    finalCatalog,
+    originalOverrides: args.originalOverrides,
+    finalOverrides,
+    initialAdvisories: args.initialAdvisories,
+    finalAdvisories,
+  };
+
+  const colored = renderTerminalSummary(summary, { color: true });
+  logger.raw('');
+  logger.raw(colored);
+
+  if (options.summaryFile && !dryRun) {
+    try {
+      const plain = renderTerminalSummary(summary, { color: false });
+      fs.writeFileSync(options.summaryFile, plain + '\n', 'utf8');
+      logger.detail(`Wrote run summary to ${options.summaryFile}.`);
+    } catch (e) {
+      logger.warn(`Could not write summary to ${options.summaryFile}: ${(e as Error).message}.`);
+    }
+  }
+}
+
+function readPackageJsonName(text: string | null): string | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as { name?: unknown };
+    return typeof parsed.name === 'string' ? parsed.name : undefined;
+  } catch {
+    return undefined;
+  }
 }

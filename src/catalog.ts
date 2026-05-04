@@ -68,6 +68,23 @@ export function getCatalogVersions(yaml: string): Map<string, string> {
   return versions;
 }
 
+/**
+ * Parse the catalog block once and return both names and versions together.
+ * Avoids calling `parseDocument` twice when both are needed in the same call site.
+ */
+export function readCatalog(yaml: string): { names: Set<string>; versions: Map<string, string> } {
+  const raw = readCatalogMap(yaml);
+  const names = new Set(raw.keys());
+  const versions = new Map<string, string>();
+  for (const [name, value] of raw) {
+    if (!value) continue;
+    if (value.startsWith('$')) continue;
+    const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(value)?.[1];
+    if (concrete) versions.set(name, concrete);
+  }
+  return { names, versions };
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

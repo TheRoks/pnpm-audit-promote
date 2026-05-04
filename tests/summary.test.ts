@@ -98,8 +98,39 @@ describe('diffOverrides', () => {
     const before = new Map([['x', { value: '>=1.0.0', source: 'workspace' as const }]]);
     const after = new Map([['x', { value: '>=2.0.0', source: 'workspace' as const }]]);
     expect(diffOverrides(before, after)).toEqual([
-      { selector: 'x', before: '>=1.0.0', after: '>=2.0.0', source: 'workspace' },
+      {
+        selector: 'x',
+        before: '>=1.0.0',
+        after: '>=2.0.0',
+        source: 'workspace',
+        kind: 'modified',
+      },
     ]);
+  });
+
+  it('reports selectors removed from the after-snapshot', () => {
+    const before = new Map([
+      ['tar@6.2.1', { value: '7.5.11', source: 'package.json' as const }],
+      ['vite@<6.0.0', { value: '>=6.0.0', source: 'workspace' as const }],
+    ]);
+    const after = new Map([
+      ['tar@<=7.5.10', { value: '>=7.5.11', source: 'package.json' as const }],
+      ['vite@<6.0.0', { value: '>=6.0.0', source: 'workspace' as const }],
+    ]);
+    const diff = diffOverrides(before, after);
+    expect(diff).toHaveLength(2);
+    expect(diff.find((d) => d.selector === 'tar@6.2.1')).toEqual({
+      selector: 'tar@6.2.1',
+      before: '7.5.11',
+      source: 'package.json',
+      kind: 'removed',
+    });
+    expect(diff.find((d) => d.selector === 'tar@<=7.5.10')).toEqual({
+      selector: 'tar@<=7.5.10',
+      after: '>=7.5.11',
+      source: 'package.json',
+      kind: 'added',
+    });
   });
 });
 
@@ -189,7 +220,7 @@ describe('renderTerminalSummary', () => {
     const out = renderTerminalSummary(fixture(), { color: false });
     expect(out).toMatch(/Dependency refresh — my-app/);
     expect(out).toMatch(/1 direct package updated/);
-    expect(out).toMatch(/1 transitive package pinned via overrides/);
+    expect(out).toMatch(/1 override entry changed \(1 package\)/);
     expect(out).toMatch(/1 vulnerability fixed/);
     expect(out).toMatch(/\(1 CVE resolved\)/);
     expect(out).toMatch(/0 remaining/);
@@ -214,7 +245,7 @@ describe('renderTerminalSummary', () => {
       { color: false },
     );
     expect(out).toMatch(/No catalog versions changed\./);
-    expect(out).toMatch(/No new transitive overrides were introduced\./);
+    expect(out).toMatch(/No override changes\./);
     expect(out).toMatch(/No vulnerabilities were resolved during this run\./);
   });
 
@@ -226,6 +257,23 @@ describe('renderTerminalSummary', () => {
   it('shows audit-skipped note when applicable', () => {
     const out = renderTerminalSummary(fixture({ auditSkipped: true }), { color: false });
     expect(out).toMatch(/Audit phase skipped/);
+  });
+
+  it('renders removed override selectors with a removed-marker row', () => {
+    const out = renderTerminalSummary(
+      fixture({
+        originalOverrides: new Map([
+          ['tar@6.2.1', { value: '7.5.11', source: 'package.json' as const }],
+        ]),
+        finalOverrides: new Map([
+          ['tar@<=7.5.10', { value: '>=7.5.11', source: 'package.json' as const }],
+        ]),
+      }),
+      { color: false },
+    );
+    expect(out).toMatch(/2 override entries changed \(1 package\)/);
+    expect(out).toMatch(/tar@<=7\.5\.10\s+→\s+>=7\.5\.11/);
+    expect(out).toMatch(/tar@6\.2\.1\s+✗\s+removed.*was 7\.5\.11/);
   });
 
   it('renders a remaining-vulnerabilities section when finalAdvisories has entries', () => {

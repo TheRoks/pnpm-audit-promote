@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { refreshDeps } from '../src/refresh.js';
 import { silentLogger } from '../src/logger.js';
-import type { PnpmRunner } from '../src/pnpm.js';
+import { makeRecordingRunner } from './helpers/recordingRunner.js';
 
 let tmp: string;
 
@@ -15,33 +15,6 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
-
-interface RecordedCall {
-  args: string[];
-  capture?: boolean;
-}
-
-function makeRecordingRunner(stdoutByCmd: Record<string, string> = {}): {
-  runner: PnpmRunner;
-  calls: RecordedCall[];
-} {
-  const calls: RecordedCall[] = [];
-  const runner: PnpmRunner = {
-    async run(args) {
-      calls.push({ args });
-    },
-    async runAllowFail(args) {
-      calls.push({ args });
-      return 0;
-    },
-    async capture(args) {
-      calls.push({ args, capture: true });
-      const key = args.join(' ');
-      return { stdout: stdoutByCmd[key] ?? '', exitCode: 0 };
-    },
-  };
-  return { runner, calls };
-}
 
 describe('refreshDeps integration (mocked pnpm)', () => {
   it('rejects destructive execution in non-interactive mode without --force', async () => {
@@ -439,5 +412,56 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // Excluded package must be left untouched
     const excludedResult = fs.readFileSync(path.join(excludedDir, 'package.json'), 'utf8');
     expect(excludedResult).toContain('"overrides"');
+  });
+
+  it('honors an injected confirm() that returns false (canceled result)', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const { runner, calls } = makeRecordingRunner();
+
+    const result = await refreshDeps({
+      path: tmp,
+      logger: silentLogger,
+      pnpm: runner,
+      confirm: async () => false,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(true);
+    expect(result.summary).toBeNull();
+    // No pnpm commands should run when canceled.
+    expect(calls).toEqual([]);
+  });
+
+  it('returns RefreshResult with catalog diff data on success', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const { runner } = makeRecordingRunner();
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(false);
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(result.catalogChanges)).toBe(true);
+    expect(Array.isArray(result.overrideChanges)).toBe(true);
+    expect(Array.isArray(result.fixedAdvisories)).toBe(true);
   });
 });

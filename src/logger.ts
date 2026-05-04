@@ -6,11 +6,11 @@ export interface Logger {
   step(message: string): void;
   detail(message: string): void;
   /** True when detail/progress messages should be visible. */
-  showsDetails?(): boolean;
+  showsDetails(): boolean;
   /** Verbose-only diagnostic line (for subprocess command tracing, etc.). */
-  trace?(message: string): void;
+  trace(message: string): void;
   /** True when verbose diagnostics are enabled. */
-  isVerbose?(): boolean;
+  isVerbose(): boolean;
   /** A bullet under a `detail` group. Quiet-suppressed like `detail`. */
   bullet(message: string): void;
   warn(message: string): void;
@@ -85,16 +85,6 @@ export function createLogger(options: ConsoleLoggerOptions = {}): Logger {
       out(message);
     },
   };
-}
-
-/** Returns true when a logger should emit verbose diagnostics. */
-export function isVerboseLoggingEnabled(logger: Logger): boolean {
-  return logger.isVerbose?.() ?? false;
-}
-
-/** Returns true when detail/progress logging should be emitted. */
-export function isDetailLoggingEnabled(logger: Logger): boolean {
-  return logger.showsDetails?.() ?? true;
 }
 
 /** Default logger instance at `normal` level. Kept for backwards compatibility. */

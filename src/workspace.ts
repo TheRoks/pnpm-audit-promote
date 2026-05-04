@@ -4,6 +4,7 @@ import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger.js';
 import { PRUNED_DIR_NAMES } from './fsWalk.js';
+import { WorkspaceNotFoundError } from './errors.js';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -39,9 +40,7 @@ export class WorkspaceState {
     const root = path.resolve(workspacePath);
     const ws = new WorkspaceState(root);
     if (!fs.existsSync(ws.workspaceYaml)) {
-      throw new Error(
-        `pnpm-workspace.yaml not found at '${ws.workspaceYaml}'. Pass --path <workspace root>.`,
-      );
+      throw new WorkspaceNotFoundError(ws.workspaceYaml);
     }
     ws.dryRun = options.dryRun ?? false;
     ws.detectEol();
@@ -100,15 +99,6 @@ function extractYamlPackagesGlobs(yaml: string): string[] | null {
   return globs.length > 0 ? globs : null;
 }
 
-/** Returns true when the normalized relative path matches the workspace glob. */
-function matchesWorkspaceGlob(relPath: string, pattern: string): boolean {
-  // `picomatch` understands the full pnpm/npm-workspaces glob dialect:
-  // `**`, `*`, `?`, `{a,b}`, character classes, and escaped specials. The
-  // previous hand-rolled regex translator did not support brace expansion
-  // and could mismatch nested directories.
-  return picomatch.isMatch(relPath, pattern, { dot: true });
-}
-
 /**
  * Resolves the set of absolute directory paths for all workspace packages
  * (matched by the `packages:` globs in `pnpm-workspace.yaml` or the
@@ -151,12 +141,18 @@ export function resolveWorkspacePackageDirs(state: WorkspaceState): Set<string> 
 
   if (positiveGlobs.length === 0) return null;
 
+  // Pre-compile matchers once so the loop body only invokes pre-built testers
+  // (avoids re-compiling/cache-looking-up the glob pattern per directory).
+  const posMatchers = positiveGlobs.map((g) => picomatch(g, { dot: true }));
+  const negMatchers = negativeGlobs.map((g) => picomatch(g, { dot: true }));
+
   const result = new Set<string>();
   result.add(state.workspaceRoot); // root package.json is always in scope
 
+  // Index-based loop (O(1) per iteration) avoids the O(n) cost of Array.shift().
   const queue = [state.workspaceRoot];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i]!;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -168,9 +164,7 @@ export function resolveWorkspacePackageDirs(state: WorkspaceState): Set<string> 
       if (PRUNED_DIR_NAMES.has(e.name)) continue;
       const full = path.join(current, e.name);
       const rel = path.relative(state.workspaceRoot, full).split(path.sep).join('/');
-      const matched =
-        positiveGlobs.some((g) => matchesWorkspaceGlob(rel, g)) &&
-        !negativeGlobs.some((g) => matchesWorkspaceGlob(rel, g));
+      const matched = posMatchers.some((m) => m(rel)) && !negMatchers.some((m) => m(rel));
       if (matched) {
         result.add(full);
       }

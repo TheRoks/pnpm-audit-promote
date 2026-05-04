@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { isDetailLoggingEnabled, type Logger } from './logger.js';
+import { spawn } from 'node:child_process';
+import { type Logger } from './logger.js';
 import type { WorkspaceState } from './workspace.js';
 import { resolveWorkspacePackageDirs } from './workspace.js';
 import { findNodeModulesFolders, findWorkspaceFiles } from './fsWalk.js';
@@ -39,7 +39,10 @@ export function removePnpmLockFile(state: WorkspaceState, logger: Logger): void 
   }
 }
 
-export function removeNodeModulesFolders(state: WorkspaceState, logger: Logger): void {
+export async function removeNodeModulesFolders(
+  state: WorkspaceState,
+  logger: Logger,
+): Promise<void> {
   logger.step('Remove node_modules directories');
   const dirs = findNodeModulesFolders(state.workspaceRoot);
   if (dirs.length === 0) {
@@ -48,7 +51,7 @@ export function removeNodeModulesFolders(state: WorkspaceState, logger: Logger):
   }
 
   const spinner = createCleanupSpinner({
-    enabled: !state.dryRun && Boolean(process.stdout.isTTY) && isDetailLoggingEnabled(logger),
+    enabled: !state.dryRun && Boolean(process.stdout.isTTY) && logger.showsDetails(),
     total: dirs.length,
   });
   spinner.start();
@@ -64,18 +67,18 @@ export function removeNodeModulesFolders(state: WorkspaceState, logger: Logger):
     processedCount += 1;
     spinner.update(processedCount);
     // On Windows, `rd /s /q` is dramatically faster than recursive rm for
-    // deep node_modules trees; on macOS/Linux fall through to fs.rmSync.
+    // deep node_modules trees; on macOS/Linux fall through to fs.promises.rm.
     if (process.platform === 'win32') {
-      spawnSync('cmd', ['/c', 'rd', '/s', '/q', dir], { stdio: 'ignore' });
+      await spawnAsync('cmd', ['/c', 'rd', '/s', '/q', dir]);
     }
-    if (fs.existsSync(dir)) {
+    if (await pathExists(dir)) {
       try {
-        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+        await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 });
       } catch {
         // fall through to warning
       }
     }
-    if (fs.existsSync(dir)) {
+    if (await pathExists(dir)) {
       logger.warn(`Could not fully remove ${dir} (possibly locked by another process).`);
     } else {
       removedCount += 1;
@@ -192,6 +195,21 @@ export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger
       `${state.dryRun ? 'Dry-run: would remove' : 'Removed'} pnpm.overrides from ${rel}.`,
     );
   }
+}
+
+function spawnAsync(cmd: string, args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: 'ignore' });
+    child.on('close', () => resolve());
+    child.on('error', () => resolve());
+  });
+}
+
+function pathExists(p: string): Promise<boolean> {
+  return fs.promises.access(p).then(
+    () => true,
+    () => false,
+  );
 }
 
 function createCleanupSpinner(options: { enabled: boolean; total: number }): {

@@ -6,8 +6,7 @@ import {
   OVERRIDES_BLOCK_PATTERN,
   applyCatalogUpdates,
   collapseBlankLines,
-  getCatalogNames,
-  getCatalogVersions,
+  readCatalog,
 } from '../catalog.js';
 import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil.js';
 import { reportPromotions } from './bumpReporting.js';
@@ -25,8 +24,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
   if (!om || !cm) return current;
 
   const overridesBody = om[2] ?? '';
-  const catalogNames = getCatalogNames(current);
-  const catalogVersions = getCatalogVersions(current);
+  const { names: catalogNames, versions: catalogVersions } = readCatalog(current);
   const remaining: string[] = [];
   const updates = new Map<string, string>();
   const entryPattern =

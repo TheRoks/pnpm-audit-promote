@@ -2,7 +2,7 @@ import semver from 'semver';
 import type { Logger } from '../logger.js';
 import type { WorkspaceState } from '../workspace.js';
 import type { PnpmRunner } from '../pnpm.js';
-import { getCatalogNames, getCatalogVersions } from '../catalog.js';
+import { readCatalog } from '../catalog.js';
 import {
   compareSemVer,
   getConcreteVersion,
@@ -81,9 +81,21 @@ export async function getDirectDepCatalogBumps(
   }
   if (!audit.advisories) return { bumps, tiers };
 
-  const catalogNames = getCatalogNames(state.desiredWorkspaceYaml);
-  const catalogVersions = getCatalogVersions(state.desiredWorkspaceYaml);
+  const { names: catalogNames, versions: catalogVersions } = readCatalog(
+    state.desiredWorkspaceYaml,
+  );
   const versionCache = new Map<string, string[]>();
+
+  // Pre-fetch version lists for all affected catalog modules in parallel so
+  // each registry round-trip fires concurrently instead of sequentially.
+  const affectedModules = [
+    ...new Set(
+      Object.values(audit.advisories)
+        .map((adv) => adv.module_name ?? '')
+        .filter((m) => catalogNames.has(m)),
+    ),
+  ];
+  await Promise.all(affectedModules.map((m) => getAvailableVersions(pnpm, m, versionCache)));
 
   for (const adv of Object.values(audit.advisories)) {
     const module = adv.module_name ?? '';

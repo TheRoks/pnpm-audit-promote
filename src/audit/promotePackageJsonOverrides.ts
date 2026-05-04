@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import semver from 'semver';
 import type { Logger } from '../logger.js';
 import type { WorkspaceState } from '../workspace.js';
-import { applyCatalogUpdates, getCatalogNames, getCatalogVersions } from '../catalog.js';
+import { applyCatalogUpdates, readCatalog } from '../catalog.js';
 import { findMatchingBrace } from '../jsonEdit.js';
 import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil.js';
 import { reportPromotions } from './bumpReporting.js';
@@ -30,8 +30,7 @@ export function syncPackageJsonOverridesIntoCatalog(
 
   const body = pjText.slice(bodyStart, end);
 
-  const catalogNames = getCatalogNames(desiredYaml);
-  const catalogVersions = getCatalogVersions(desiredYaml);
+  const { names: catalogNames, versions: catalogVersions } = readCatalog(desiredYaml);
   const promotions = new Map<string, string>();
   const keptLines: string[] = [];
   const entryRe = /^([ \t]*)"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(,?)\s*$/;

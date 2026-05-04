@@ -1,7 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import picomatch from 'picomatch';
+import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger.js';
 import { PRUNED_DIR_NAMES } from './fsWalk.js';
+import { WorkspaceNotFoundError } from './errors.js';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -37,9 +40,7 @@ export class WorkspaceState {
     const root = path.resolve(workspacePath);
     const ws = new WorkspaceState(root);
     if (!fs.existsSync(ws.workspaceYaml)) {
-      throw new Error(
-        `pnpm-workspace.yaml not found at '${ws.workspaceYaml}'. Pass --path <workspace root>.`,
-      );
+      throw new WorkspaceNotFoundError(ws.workspaceYaml);
     }
     ws.dryRun = options.dryRun ?? false;
     ws.detectEol();
@@ -85,24 +86,17 @@ export class WorkspaceState {
 
 /** Extract the `packages:` list from pnpm-workspace.yaml text. */
 function extractYamlPackagesGlobs(yaml: string): string[] | null {
-  const blockMatch = /^packages:\s*\r?\n((?:[ \t]+-[ \t]+.*\r?\n?)*)/m.exec(yaml);
-  if (!blockMatch?.[1]) return null;
-  const globs: string[] = [];
-  for (const line of blockMatch[1].split(/\r?\n/)) {
-    const m = /^[ \t]+-[ \t]+['"]?(.+?)['"]?\s*$/.exec(line);
-    if (m?.[1]) globs.push(m[1].trim());
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(yaml);
+  } catch {
+    return null;
   }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const pkgs = (parsed as { packages?: unknown }).packages;
+  if (!Array.isArray(pkgs)) return null;
+  const globs = pkgs.filter((g): g is string => typeof g === 'string').map((g) => g.trim());
   return globs.length > 0 ? globs : null;
-}
-
-/** Returns true when the normalized relative path matches the workspace glob. */
-function matchesWorkspaceGlob(relPath: string, pattern: string): boolean {
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '__GLOBSTAR__')
-    .replace(/\*/g, '[^/]+')
-    .replace(/__GLOBSTAR__/g, '.+');
-  return new RegExp(`^${regexStr}$`).test(relPath);
 }
 
 /**
@@ -147,12 +141,18 @@ export function resolveWorkspacePackageDirs(state: WorkspaceState): Set<string> 
 
   if (positiveGlobs.length === 0) return null;
 
+  // Pre-compile matchers once so the loop body only invokes pre-built testers
+  // (avoids re-compiling/cache-looking-up the glob pattern per directory).
+  const posMatchers = positiveGlobs.map((g) => picomatch(g, { dot: true }));
+  const negMatchers = negativeGlobs.map((g) => picomatch(g, { dot: true }));
+
   const result = new Set<string>();
   result.add(state.workspaceRoot); // root package.json is always in scope
 
+  // Index-based loop (O(1) per iteration) avoids the O(n) cost of Array.shift().
   const queue = [state.workspaceRoot];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i]!;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -164,9 +164,7 @@ export function resolveWorkspacePackageDirs(state: WorkspaceState): Set<string> 
       if (PRUNED_DIR_NAMES.has(e.name)) continue;
       const full = path.join(current, e.name);
       const rel = path.relative(state.workspaceRoot, full).split(path.sep).join('/');
-      const matched =
-        positiveGlobs.some((g) => matchesWorkspaceGlob(rel, g)) &&
-        !negativeGlobs.some((g) => matchesWorkspaceGlob(rel, g));
+      const matched = posMatchers.some((m) => m(rel)) && !negMatchers.some((m) => m(rel));
       if (matched) {
         result.add(full);
       }

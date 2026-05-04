@@ -1,5 +1,6 @@
 import spawn from 'cross-spawn';
-import { isDetailLoggingEnabled, type Logger } from './logger.js';
+import { type Logger } from './logger.js';
+import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors.js';
 
 export interface PnpmRunner {
   /** Run pnpm and throw on non-zero exit. */
@@ -49,7 +50,7 @@ export function createPnpmRunner({
         execute: () => spawnPnpm(args, { cwd, inheritOutput }),
       });
       if (code !== 0) {
-        throw new Error(`pnpm ${args.join(' ')} failed with exit code ${code}`);
+        throw new PnpmCommandFailedError(args, code);
       }
     },
     async runAllowFail(args) {
@@ -100,7 +101,7 @@ async function runWithProgress(options: {
     return execute();
   }
 
-  if (!isDetailLoggingEnabled(logger)) {
+  if (!logger.showsDetails()) {
     return execute();
   }
 
@@ -206,7 +207,7 @@ function spawnPnpm(args: string[], opts: { cwd: string; inheritOutput: boolean }
     });
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
-        reject(new Error('pnpm is not installed or not on PATH.'));
+        reject(new PnpmNotInstalledError());
       } else {
         reject(err);
       }
@@ -224,14 +225,14 @@ export async function ensurePnpmAvailable(): Promise<void> {
     const child = spawn(PNPM, ['--version'], { stdio: 'ignore' });
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
-        reject(new Error('pnpm is not installed or not on PATH.'));
+        reject(new PnpmNotInstalledError());
       } else {
         reject(err);
       }
     });
     child.on('close', (code: number | null) => {
       if (code === 0) resolve();
-      else reject(new Error('pnpm is not installed or not on PATH.'));
+      else reject(new PnpmNotInstalledError());
     });
   });
 }

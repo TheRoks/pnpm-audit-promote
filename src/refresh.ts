@@ -1,5 +1,4 @@
-import * as readline from 'node:readline';
-import { consoleLogger, isVerboseLoggingEnabled, type Logger } from './logger.js';
+import { consoleLogger, type Logger } from './logger.js';
 import { WorkspaceState } from './workspace.js';
 import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm.js';
 import {
@@ -8,12 +7,30 @@ import {
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
 } from './cleanup.js';
-import {
-  getDirectDepCatalogBumps,
-  syncAuditOverridesIntoCatalog,
-  syncPackageJsonOverridesIntoCatalog,
-} from './auditSync.js';
+import { getDirectDepCatalogBumps } from './audit/parseAdvisories.js';
+import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides.js';
+import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides.js';
 import { applyCatalogUpdates } from './catalog.js';
+import {
+  extractAdvisories,
+  diffAdvisories,
+  diffCatalog,
+  diffOverrides,
+  readAllOverrides,
+  readCatalogSnapshot,
+  safeReadFile,
+} from './summary/collect.js';
+import { emitRunSummary } from './summary/emit.js';
+import { formatDuration } from './summary/render.js';
+import type {
+  AdvisorySummary,
+  CatalogChange,
+  OverrideChange,
+  RunSummaryData,
+} from './summary/types.js';
+import { createProgressLogger } from './progress.js';
+import { defaultConfirmDestructive, type ConfirmFn } from './prompt.js';
+import pkg from '../package.json' with { type: 'json' };
 
 export interface RefreshOptions {
   /** Workspace root containing pnpm-workspace.yaml. */
@@ -27,6 +44,12 @@ export interface RefreshOptions {
    * `pnpm` binary on PATH. Useful for tests and advanced integrations.
    */
   pnpm?: PnpmRunner;
+  /**
+   * Inject a custom destructive-action confirmation function. Defaults to a
+   * stdin-readline prompt; tests can pass a deterministic stub instead of
+   * mutating `process.stdin.isTTY`.
+   */
+  confirm?: ConfirmFn;
   /** When true, plan and log changes without writing files or invoking pnpm. */
   dryRun?: boolean;
   /** Skip the audit + catalog promotion phase. */
@@ -39,6 +62,38 @@ export interface RefreshOptions {
    * warning). Defaults to true.
    */
   allowMajor?: boolean;
+  /**
+   * When true (default), prints a terminal-pretty summary at the end
+   * describing direct/transitive package changes and resolved CVEs.
+   * A plain-text (no ANSI) copy is also written to `summaryFile` when
+   * provided.
+   */
+  summary?: boolean;
+  /** Optional path to also write the plain-text summary to. */
+  summaryFile?: string;
+}
+
+/**
+ * Outcome of a {@link refreshDeps} invocation. Programmatic callers can
+ * inspect this to decide what changed without parsing log output.
+ */
+export interface RefreshResult {
+  /** True when the user (or the non-interactive guard) declined to proceed. */
+  canceled: boolean;
+  /** Total wall-clock time spent in `refreshDeps`. */
+  durationMs: number;
+  /** Direct-dependency catalog version changes. Empty when nothing changed. */
+  catalogChanges: readonly CatalogChange[];
+  /** Transitive overrides added or modified by `pnpm audit --fix`. */
+  overrideChanges: readonly OverrideChange[];
+  /** Vulnerabilities present at the start of the run. */
+  initialAdvisories: readonly AdvisorySummary[];
+  /** Vulnerabilities still present after the run (best-effort). */
+  finalAdvisories: readonly AdvisorySummary[];
+  /** Advisories cleared during the run (initial \\ final, by id). */
+  fixedAdvisories: readonly AdvisorySummary[];
+  /** Full computed run summary. `null` when `summary: false` was passed. */
+  summary: RunSummaryData | null;
 }
 
 /**
@@ -58,24 +113,16 @@ export interface RefreshOptions {
  *   9.  `pnpm install`
  *   10. `pnpm dedupe` (unless `skipDedupe`)
  *
- * Steps 6–8 are skipped when `skipAudit` is true.
+ * Steps 6—8 are skipped when `skipAudit` is true.
  */
-export async function refreshDeps(options: RefreshOptions): Promise<void> {
+export async function refreshDeps(options: RefreshOptions): Promise<RefreshResult> {
   const logger = options.logger ?? consoleLogger;
   const dryRun = options.dryRun ?? false;
+  const skipAudit = options.skipAudit ?? false;
   const startedAt = Date.now();
-  const totalProgressSteps = options.skipAudit === true ? 6 : 11;
-  let progressStep = 0;
-  const nextProgressStep = (title: string): void => {
-    progressStep += 1;
-    logger.step(`Step ${progressStep}/${totalProgressSteps} — ${title}`);
-  };
-  const progressLogger: Logger = {
-    ...logger,
-    step(message: string): void {
-      nextProgressStep(message);
-    },
-  };
+
+  const totalProgressSteps = skipAudit ? 6 : 11;
+  const progressLogger = createProgressLogger(logger, totalProgressSteps);
 
   if (!options.pnpm && !dryRun) {
     await ensurePnpmAvailable();
@@ -86,20 +133,55 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
     createPnpmRunner({
       cwd: state.workspaceRoot,
       logger,
-      inheritOutput: isVerboseLoggingEnabled(logger),
+      inheritOutput: logger.isVerbose(),
       dryRun,
     });
 
   logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
 
-  if (!(await confirmDestructive(Boolean(options.force), dryRun))) {
+  const confirm = options.confirm ?? defaultConfirmDestructive;
+  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
     logger.info('Operation canceled by user.');
-    return;
+    return {
+      canceled: true,
+      durationMs: Date.now() - startedAt,
+      catalogChanges: [],
+      overrideChanges: [],
+      initialAdvisories: [],
+      finalAdvisories: [],
+      fixedAdvisories: [],
+      summary: null,
+    };
+  }
+
+  // Capture the original state BEFORE any cleanup mutates files. Used by
+  // the run-summary at the end.
+  const originalYaml = state.desiredWorkspaceYaml;
+  const originalPjText = safeReadFile(state.rootPackageJson);
+  const originalCatalog = readCatalogSnapshot(originalYaml);
+  const originalOverrides = readAllOverrides(originalYaml, originalPjText);
+  const workspaceName = readPackageJsonName(originalPjText);
+
+  // Capture the TRUE initial vulnerability state — i.e. the audit result
+  // with any existing overrides still applied. If we ran this after the
+  // cleanup phase, every existing override would be stripped first and
+  // its masked vulnerabilities would resurface, only to be "fixed" again
+  // when audit-fix re-adds the same overrides. That would inflate the
+  // "vulnerabilities fixed" count with non-changes.
+  let initialAdvisories: AdvisorySummary[] = [];
+  if (!skipAudit && !dryRun) {
+    try {
+      const { stdout } = await pnpm.capture(['audit', '--json']);
+      initialAdvisories = extractAdvisories(stdout);
+    } catch {
+      // Best-effort: a missing lockfile or other audit failure leaves the
+      // initial set empty rather than aborting the whole run.
+    }
   }
 
   // Cleanup phase ---------------------------------------------------------
   removePnpmLockFile(state, progressLogger);
-  removeNodeModulesFolders(state, progressLogger);
+  await removeNodeModulesFolders(state, progressLogger);
   removeWorkspaceOverridesBlock(state, progressLogger);
   removePackageJsonOverrides(state, progressLogger);
 
@@ -115,8 +197,20 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
   }
 
   // Audit phase -----------------------------------------------------------
-  if (!options.skipAudit) {
-    await preAuditCatalogBump(state, pnpm, progressLogger, options.allowMajor ?? true);
+  if (!skipAudit) {
+    // Capture a post-cleanup audit JSON and share it with the pre-audit
+    // catalog bump (which needs the unmasked vulnerability set to decide
+    // which direct deps to bump). This is *separate* from the initial
+    // audit captured above for the summary.
+    const postCleanupAuditStdout = dryRun ? '' : (await pnpm.capture(['audit', '--json'])).stdout;
+
+    await preAuditCatalogBump(
+      state,
+      pnpm,
+      progressLogger,
+      options.allowMajor ?? true,
+      postCleanupAuditStdout,
+    );
     await auditFix(state, pnpm, progressLogger);
 
     progressLogger.step('Reinstall dependencies (post-audit reconciliation)');
@@ -132,6 +226,23 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
     logger.detail('Skipped audit and catalog promotion (--no-audit).');
   }
 
+  // Summary phase ---------------------------------------------------------
+  const summary = await emitRunSummary({
+    state,
+    pnpm,
+    logger,
+    enabled: options.summary !== false,
+    summaryFile: options.summaryFile,
+    skipAudit,
+    dryRun,
+    durationMs: Date.now() - startedAt,
+    toolVersion: pkg.version,
+    workspaceName,
+    originalCatalog,
+    originalOverrides,
+    initialAdvisories,
+  });
+
   logger.raw('');
   const totalElapsed = formatDuration(Date.now() - startedAt);
   logger.success(
@@ -139,14 +250,39 @@ export async function refreshDeps(options: RefreshOptions): Promise<void> {
       ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
       : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
   );
-}
 
-function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  // Programmatic result. When `summary` was disabled, fall back to a
+  // direct re-computation so callers always get diff data.
+  if (summary) {
+    const { fixed } = diffAdvisories(summary.initialAdvisories, summary.finalAdvisories);
+    return {
+      canceled: false,
+      durationMs: summary.durationMs,
+      catalogChanges: diffCatalog(summary.originalCatalog, summary.finalCatalog),
+      overrideChanges: diffOverrides(summary.originalOverrides, summary.finalOverrides),
+      initialAdvisories: summary.initialAdvisories,
+      finalAdvisories: summary.finalAdvisories,
+      fixedAdvisories: fixed,
+      summary,
+    };
+  }
+
+  // summary: false branch — recompute the diffs without rendering.
+  const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
+  const finalPjText = safeReadFile(state.rootPackageJson);
+  const finalCatalog = readCatalogSnapshot(finalYaml);
+  const finalOverrides = readAllOverrides(finalYaml, finalPjText);
+  const { fixed } = diffAdvisories(initialAdvisories, []);
+  return {
+    canceled: false,
+    durationMs: Date.now() - startedAt,
+    catalogChanges: diffCatalog(originalCatalog, finalCatalog),
+    overrideChanges: diffOverrides(originalOverrides, finalOverrides),
+    initialAdvisories,
+    finalAdvisories: [],
+    fixedAdvisories: fixed,
+    summary: null,
+  };
 }
 
 async function runAndRestore(
@@ -166,9 +302,13 @@ async function preAuditCatalogBump(
   pnpm: PnpmRunner,
   logger: Logger,
   allowMajor: boolean,
+  auditJsonStdout: string,
 ): Promise<void> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
-  const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, { allowMajor });
+  const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
+    allowMajor,
+    auditJsonStdout,
+  });
   logger.step('Reinstall dependencies after catalog updates');
   if (bumps.size === 0) {
     logger.detail('No vulnerable direct dependencies detected in catalog-managed packages.');
@@ -203,26 +343,12 @@ async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger)
   );
 }
 
-async function confirmDestructive(force: boolean, dryRun: boolean): Promise<boolean> {
-  if (force || dryRun) return true;
-
-  // Non-interactive: require explicit --force rather than blocking on stdin.
-  if (!process.stdin.isTTY) {
-    throw new Error(
-      'Refusing to run destructive operations non-interactively. Re-run with --force.',
-    );
+function readPackageJsonName(text: string | null): string | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as { name?: unknown };
+    return typeof parsed.name === 'string' ? parsed.name : undefined;
+  } catch {
+    return undefined;
   }
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  const answer = await new Promise<string>((resolve) => {
-    rl.question(
-      'This will delete pnpm-lock.yaml, every node_modules, and all overrides in pnpm-workspace.yaml. Continue? [y/N] ',
-      (a) => resolve(a),
-    );
-  });
-  rl.close();
-  return /^(y|yes)$/i.test(answer.trim());
 }

@@ -16,6 +16,8 @@ interface CliOptions {
   audit: boolean;
   dedupe: boolean;
   allowMajor: boolean;
+  summary: boolean;
+  summaryFile?: string;
   verbose: boolean;
   quiet: boolean;
 }
@@ -39,6 +41,8 @@ program
     'Allow catalog bumps that cross a major version boundary (still logged as warnings). Use --no-allow-major to skip them.',
     true,
   )
+  .option('--no-summary', 'Suppress the Markdown PR summary printed at the end of the run.')
+  .option('--summary-file <path>', 'Also write the Markdown PR summary to the given file path.')
   .option(
     '-v, --verbose',
     'Verbose output (includes raw pnpm stdout/stderr and command tracing)',
@@ -56,6 +60,8 @@ program
         skipAudit: !opts.audit,
         skipDedupe: !opts.dedupe,
         allowMajor: opts.allowMajor,
+        summary: opts.summary,
+        summaryFile: opts.summaryFile,
         logger,
       });
     } catch (e) {

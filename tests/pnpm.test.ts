@@ -23,6 +23,9 @@ function makeLogger(): Logger {
     isVerbose() {
       return false;
     },
+    showsDetails() {
+      return true;
+    },
   };
 }
 

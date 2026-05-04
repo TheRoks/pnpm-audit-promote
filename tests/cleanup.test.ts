@@ -67,7 +67,7 @@ describe('cleanup helpers', () => {
     expect(logs.some((l) => /Dry-run: would remove/.test(l))).toBe(true);
   });
 
-  it('removes node_modules directories and logs a summary', () => {
+  it('removes node_modules directories and logs a summary', async () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web', 'node_modules'), { recursive: true });
 
@@ -79,12 +79,12 @@ describe('cleanup helpers', () => {
       },
     };
 
-    removeNodeModulesFolders(state, logger);
+    await removeNodeModulesFolders(state, logger);
     expect(fs.existsSync(path.join(tmp, 'apps', 'web', 'node_modules'))).toBe(false);
     expect(details.some((d) => /Removed 1\/1 node_modules directories/.test(d))).toBe(true);
   });
 
-  it('renders spinner output in TTY detail mode', () => {
+  it('renders spinner output in TTY detail mode', async () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web', 'node_modules'), { recursive: true });
 
@@ -94,7 +94,7 @@ describe('cleanup helpers', () => {
 
     const logger = createLogger({ level: 'normal', color: false });
     try {
-      removeNodeModulesFolders(state, logger);
+      await removeNodeModulesFolders(state, logger);
     } finally {
       if (ttyDescriptor) {
         Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor);
@@ -106,12 +106,12 @@ describe('cleanup helpers', () => {
     expect(writes.some((w) => w.endsWith('\u001b[2K'))).toBe(true);
   });
 
-  it('handles no node_modules directories', () => {
+  it('handles no node_modules directories', async () => {
     const state = makeState();
     const lines: string[] = [];
     const logger = createLogger({ out: (l) => lines.push(l), color: false });
 
-    removeNodeModulesFolders(state, logger);
+    await removeNodeModulesFolders(state, logger);
 
     expect(lines.some((l) => /No node_modules directories found/.test(l))).toBe(true);
   });

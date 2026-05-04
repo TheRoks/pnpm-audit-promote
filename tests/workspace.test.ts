@@ -134,4 +134,37 @@ describe('resolveWorkspacePackageDirs', () => {
     const ws = WorkspaceState.initialize(tmp);
     expect(resolveWorkspacePackageDirs(ws)).toBeNull();
   });
+
+  it('matches brace-expansion globs (picomatch dialect)', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      ['packages:', '  - "{apps,libs}/*"', ''].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root' }), 'utf8');
+    fs.mkdirSync(path.join(tmp, 'apps', 'web'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'libs', 'core'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'tools', 'ignore-me'), { recursive: true });
+
+    const ws = WorkspaceState.initialize(tmp);
+    const dirs = resolveWorkspacePackageDirs(ws);
+    expect(dirs?.has(path.join(tmp, 'apps', 'web'))).toBe(true);
+    expect(dirs?.has(path.join(tmp, 'libs', 'core'))).toBe(true);
+    expect(dirs?.has(path.join(tmp, 'tools', 'ignore-me'))).toBe(false);
+  });
+
+  it('matches deep ** globs (picomatch dialect)', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      ['packages:', '  - "packages/**"', ''].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root' }), 'utf8');
+    fs.mkdirSync(path.join(tmp, 'packages', 'a', 'sub'), { recursive: true });
+
+    const ws = WorkspaceState.initialize(tmp);
+    const dirs = resolveWorkspacePackageDirs(ws);
+    expect(dirs?.has(path.join(tmp, 'packages', 'a'))).toBe(true);
+    expect(dirs?.has(path.join(tmp, 'packages', 'a', 'sub'))).toBe(true);
+  });
 });

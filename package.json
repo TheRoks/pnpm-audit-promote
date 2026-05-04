@@ -22,6 +22,7 @@
   },
   "homepage": "https://github.com/TheRoks/pnpm-audit-promote#readme",
   "type": "module",
+  "sideEffects": false,
   "bin": {
     "pnpm-audit-promote": "dist/cli.js"
   },
@@ -61,14 +62,18 @@
   "dependencies": {
     "commander": "^14.0.3",
     "cross-spawn": "^7.0.6",
+    "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
-    "semver": "^7.6.3"
+    "picomatch": "^4.0.4",
+    "semver": "^7.6.3",
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@eslint/js": "^10.0.1",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^25.6.0",
+    "@types/picomatch": "^4.0.3",
     "@types/semver": "^7.5.8",
     "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.2.1",

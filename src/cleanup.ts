@@ -160,10 +160,11 @@ export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger
   }
 }
 
-function createCleanupSpinner(options: {
-  enabled: boolean;
-  total: number;
-}): { start: () => void; update: (processed: number) => void; stop: () => void } {
+function createCleanupSpinner(options: { enabled: boolean; total: number }): {
+  start: () => void;
+  update: (processed: number) => void;
+  stop: () => void;
+} {
   const { enabled, total } = options;
   if (!enabled) {
     return {

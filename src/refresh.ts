@@ -188,11 +188,7 @@ async function preAuditCatalogBump(
   await runAndRestore(pnpm, state, logger, ['install']);
 }
 
-async function auditFix(
-  state: WorkspaceState,
-  pnpm: PnpmRunner,
-  logger: Logger,
-): Promise<void> {
+async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger): Promise<void> {
   logger.step('Apply pnpm audit fixes');
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
   const code = await pnpm.runAllowFail(['audit', '--fix']);

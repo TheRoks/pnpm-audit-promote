@@ -105,7 +105,10 @@ async function runWithProgress(options: {
   }
 
   const command = `pnpm ${args.join(' ')}`;
-  const spinnerController = createSpinner({ command, enabled: spinner && Boolean(process.stdout.isTTY) });
+  const spinnerController = createSpinner({
+    command,
+    enabled: spinner && Boolean(process.stdout.isTTY),
+  });
   if (spinnerController.enabled) {
     spinnerController.start();
   } else {
@@ -137,10 +140,12 @@ async function runWithProgress(options: {
   }
 }
 
-function createSpinner(options: {
-  command: string;
+function createSpinner(options: { command: string; enabled: boolean }): {
   enabled: boolean;
-}): { enabled: boolean; start: () => void; update: () => void; stop: () => void } {
+  start: () => void;
+  update: () => void;
+  stop: () => void;
+} {
   const { command, enabled } = options;
   if (!enabled) {
     return {

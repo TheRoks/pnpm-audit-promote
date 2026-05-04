@@ -149,7 +149,10 @@ export async function getDirectDepCatalogBumps(
   return { bumps, tiers };
 }
 
-function advisoryAppliesToCurrent(current: string | undefined, vulnerableRange: string | undefined): boolean {
+function advisoryAppliesToCurrent(
+  current: string | undefined,
+  vulnerableRange: string | undefined,
+): boolean {
   if (!current || !vulnerableRange?.trim()) return true;
   const currentClean = semver.coerce(current)?.version;
   if (!currentClean) return true;

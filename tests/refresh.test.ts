@@ -464,4 +464,71 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(Array.isArray(result.overrideChanges)).toBe(true);
     expect(Array.isArray(result.fixedAdvisories)).toBe(true);
   });
+
+  it('raises the declared floor for ranged deps whose installed version is safe but minimum is not', async () => {
+    // Scenario: package.json has `"lodash": "^4.17.20"`.
+    // The pre-cleanup locked version is 4.17.20 (vulnerable <=4.17.20).
+    // After cleanup + fresh install, pnpm resolves to 4.17.21 (latest in
+    // range, safe). The post-cleanup audit sees no lodash advisory.
+    // We must still raise the declared minimum from ^4.17.20 to ^4.17.21
+    // using the pre-cleanup audit data.
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "packages:\n  - 'packages/*'\n\ncatalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+      'utf8',
+    );
+
+    // Pre-cleanup audit: lodash 4.17.20 is flagged (the locked minimum).
+    const preCleanupAudit = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'lodash',
+          vulnerable_versions: '<=4.17.20',
+          patched_versions: '>=4.17.21',
+          severity: 'high',
+        },
+      },
+    });
+    // Post-cleanup audit: 4.17.21 is installed (safe) — no lodash advisory.
+    const postCleanupAudit = JSON.stringify({ advisories: {} });
+
+    // The runner returns pre-cleanup data on the first `audit --json` call
+    // (before cleanup) and post-cleanup data on subsequent calls.
+    let auditCallCount = 0;
+    const { runner } = makeRecordingRunner();
+    const statefulRunner: typeof runner = {
+      ...runner,
+      async capture(args) {
+        const key = args.join(' ');
+        if (key === 'audit --json') {
+          auditCallCount += 1;
+          return { stdout: auditCallCount === 1 ? preCleanupAudit : postCleanupAudit, exitCode: 0 };
+        }
+        if (key === 'view lodash versions --json') {
+          return { stdout: JSON.stringify(['4.17.20', '4.17.21']), exitCode: 0 };
+        }
+        return { stdout: '', exitCode: 0 };
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: statefulRunner,
+      skipDedupe: true,
+    });
+
+    const result = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
+    // Declared minimum must be raised to the smallest non-vulnerable version,
+    // preserving the caret prefix.
+    expect(result.dependencies['lodash']).toBe('^4.17.21');
+  });
 });

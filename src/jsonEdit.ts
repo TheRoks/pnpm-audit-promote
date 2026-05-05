@@ -48,6 +48,24 @@ export function findMatchingBrace(text: string, openIndex: number): number {
 }
 
 /**
+ * Set a JSON property at the given path. Returns the modified text with the
+ * property written (created or updated) while preserving existing formatting.
+ * The path is variadic: pass one segment for a top-level property, multiple
+ * for nested ones (e.g. `setJsonProperty(text, 'new-value', 'dependencies', 'react')`).
+ */
+export function setJsonProperty(text: string, value: unknown, ...jsonPath: string[]): string {
+  if (jsonPath.length === 0) return text;
+  let edits;
+  try {
+    edits = modify(text, jsonPath, value, {});
+  } catch {
+    return text;
+  }
+  if (edits.length === 0) return text;
+  return applyEdits(text, edits);
+}
+
+/**
  * Remove a JSON property at the given path. Returns the modified text, or
  * the original text if the property does not exist. The path is variadic:
  * pass one segment for a top-level property, multiple for nested ones

@@ -4,11 +4,13 @@
  * plain-text version suitable for writing to a file.
  */
 import pc from 'picocolors';
+import semver from 'semver';
 import { getBarePackageName } from '../semverUtil';
 import { diffAdvisories, diffCatalog, diffOverrides } from './collect';
 import {
   type AdvisorySummary,
   type CatalogChange,
+  type PackageJsonDepChange,
   type RunSummaryData,
   type Severity,
 } from './types';
@@ -27,6 +29,7 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   const c = options.color === false ? NO_COLOR : ANSI_COLOR;
   const width = options.width ?? 64;
   const directChanges = diffCatalog(data.originalCatalog, data.finalCatalog);
+  const pkgJsonChanges: readonly PackageJsonDepChange[] = data.pkgJsonDepChanges;
   const overrideChanges = diffOverrides(data.originalOverrides, data.finalOverrides);
   const { fixed, remaining } = diffAdvisories(data.initialAdvisories, data.finalAdvisories);
 
@@ -61,7 +64,8 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   }
 
   // Headline metrics
-  const directLine = `${c.bold(String(directChanges.length))} direct ${pluralize(directChanges.length, 'package')} updated`;
+  const totalDirectCount = directChanges.length + pkgJsonChanges.length;
+  const directLine = `${c.bold(String(totalDirectCount))} direct ${pluralize(totalDirectCount, 'package')} updated`;
   const overrideEntries = overrideChanges.length;
   const transitiveLine =
     overrideEntries === 0
@@ -101,6 +105,38 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
     const beforeW = Math.max(...directChanges.map((d) => d.before.length));
     const afterW = Math.max(...directChanges.map((d) => d.after.length));
     for (const d of directChanges) {
+      const tier = d.bump === 'unknown' ? '?' : d.bump.toUpperCase();
+      const tierStr = bumpColor(d.bump, c)(tier);
+      out.push(
+        `    ${padEnd(d.name, nameW)}  ${c.dim(padStart(d.before, beforeW))} ${c.dim('→')} ${padStart(d.after, afterW)}  ${tierStr}`,
+      );
+    }
+  }
+  out.push('');
+
+  // Direct (package.json) bumps
+  out.push(`  ${c.bold('Direct dependencies (package.json files)')}`);
+  out.push(`  ${rule}`);
+  if (pkgJsonChanges.length === 0) {
+    out.push(`  ${c.dim('No package.json versions changed.')}`);
+  } else {
+    // Collapse per-file entries: one row per package name, highest after-version.
+    const collapsed = new Map<string, PackageJsonDepChange>();
+    for (const d of pkgJsonChanges) {
+      const existing = collapsed.get(d.name);
+      if (!existing) {
+        collapsed.set(d.name, d);
+      } else {
+        const newV = semver.coerce(d.after)?.version ?? '0.0.0';
+        const oldV = semver.coerce(existing.after)?.version ?? '0.0.0';
+        if (semver.gt(newV, oldV)) collapsed.set(d.name, d);
+      }
+    }
+    const rows = [...collapsed.values()];
+    const nameW = Math.max(...rows.map((d) => d.name.length));
+    const beforeW = Math.max(...rows.map((d) => d.before.length));
+    const afterW = Math.max(...rows.map((d) => d.after.length));
+    for (const d of rows) {
       const tier = d.bump === 'unknown' ? '?' : d.bump.toUpperCase();
       const tierStr = bumpColor(d.bump, c)(tier);
       out.push(
@@ -250,17 +286,7 @@ const NO_COLOR: ColorFns = {
   blue: identity,
   gray: identity,
 };
-const ANSI_COLOR: ColorFns = {
-  dim: pc.dim,
-  bold: pc.bold,
-  cyan: pc.cyan,
-  green: pc.green,
-  yellow: pc.yellow,
-  red: pc.red,
-  magenta: pc.magenta,
-  blue: pc.blue,
-  gray: pc.gray,
-};
+const ANSI_COLOR: ColorFns = pc.createColors(true);
 
 function severityColor(s: Severity, c: ColorFns): (s: string) => string {
   switch (s) {

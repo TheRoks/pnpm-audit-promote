@@ -16,6 +16,15 @@ export interface CatalogChange {
   bump: 'patch' | 'minor' | 'major' | 'unknown';
 }
 
+export interface PackageJsonDepChange {
+  /** Absolute path to the package.json file that was modified. */
+  pkgJsonPath: string;
+  name: string;
+  before: string;
+  after: string;
+  bump: 'patch' | 'minor' | 'major' | 'unknown';
+}
+
 export interface OverrideChange {
   selector: string;
   /** Prior value, if any. Always set for `modified` and `removed`. */
@@ -47,6 +56,8 @@ export interface RunSummaryData {
   finalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
   initialAdvisories: readonly AdvisorySummary[];
   finalAdvisories: readonly AdvisorySummary[];
+  /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
+  pkgJsonDepChanges: readonly PackageJsonDepChange[];
 }
 
 export const SEVERITY_RANK: Record<Severity, number> = {

@@ -6,6 +6,7 @@ export type {
   AdvisorySummary,
   CatalogChange,
   OverrideChange,
+  PackageJsonDepChange,
   RunSummaryData,
   Severity,
 } from './summary/types';

@@ -531,4 +531,55 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // preserving the caret prefix.
     expect(result.dependencies['lodash']).toBe('^4.17.21');
   });
+
+  it('returns a populated summary and accurate fixedAdvisories even when summary: false', async () => {
+    // Regression: previously the `summary: false` branch passed an empty
+    // `finalAdvisories: []` to `diffAdvisories`, so every initial advisory
+    // was incorrectly reported as fixed and `result.summary` was null.
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    // Same advisory reported on every `audit --json` call: nothing was fixed.
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'left-pad',
+          vulnerable_versions: '<2.0.0',
+          patched_versions: '>=2.0.0',
+          severity: 'high',
+        },
+      },
+    });
+    const { runner } = makeRecordingRunner();
+    const stableRunner: typeof runner = {
+      ...runner,
+      async capture(args) {
+        if (args.join(' ') === 'audit --json') {
+          return { stdout: auditJson, exitCode: 0 };
+        }
+        return { stdout: '', exitCode: 0 };
+      },
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: stableRunner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    // Summary is now always populated on a successful run.
+    expect(result.summary).not.toBeNull();
+    expect(result.summary?.initialAdvisories).toHaveLength(1);
+    expect(result.summary?.finalAdvisories).toHaveLength(1);
+    // Nothing was actually cleared, so fixedAdvisories must be empty.
+    expect(result.fixedAdvisories).toEqual([]);
+    expect(result.finalAdvisories).toHaveLength(1);
+  });
 });

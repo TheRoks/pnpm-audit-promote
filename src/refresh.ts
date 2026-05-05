@@ -25,7 +25,7 @@ import {
   readCatalogSnapshot,
   safeReadFile,
 } from './summary/collect';
-import { emitRunSummary } from './summary/emit';
+import { collectRunSummary, renderRunSummary } from './summary/emit';
 import { formatDuration } from './summary/render';
 import type {
   AdvisorySummary,
@@ -98,7 +98,11 @@ export interface RefreshResult {
   finalAdvisories: readonly AdvisorySummary[];
   /** Advisories cleared during the run (initial \\ final, by id). */
   fixedAdvisories: readonly AdvisorySummary[];
-  /** Full computed run summary. `null` when `summary: false` was passed. */
+  /**
+   * Full computed run summary. Always populated on a successful run
+   * (regardless of the `summary` rendering flag). `null` only when the
+   * run was canceled before any work began.
+   */
   summary: RunSummaryData | null;
 }
 
@@ -122,6 +126,76 @@ export interface RefreshResult {
  * Steps 6—8 are skipped when `skipAudit` is true.
  */
 export async function refreshDeps(options: RefreshOptions): Promise<RefreshResult> {
+  const ctx = await prepareRun(options);
+  const { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt } = ctx;
+
+  const confirm = options.confirm ?? defaultConfirmDestructive;
+  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
+    logger.info('Operation canceled by user.');
+    return canceledResult(Date.now() - startedAt);
+  }
+
+  const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
+
+  await runCleanupPhase(state, progressLogger);
+
+  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
+    skipDedupe: Boolean(options.skipDedupe),
+    installLabel: 'Install dependencies',
+  });
+
+  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+  if (!skipAudit) {
+    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+      skipDedupe: Boolean(options.skipDedupe),
+      allowMajor: options.allowMajor ?? true,
+      dryRun,
+      preCleanupAuditRaw: initial.preCleanupAuditRaw,
+    });
+  } else {
+    logger.detail('Skipped audit and catalog promotion (--no-audit).');
+  }
+
+  // Always assemble the canonical summary; rendering is conditional.
+  const summary = await collectRunSummary({
+    state,
+    pnpm,
+    skipAudit,
+    dryRun,
+    durationMs: Date.now() - startedAt,
+    toolVersion: pkg.version,
+    workspaceName: initial.workspaceName,
+    originalCatalog: initial.originalCatalog,
+    originalOverrides: initial.originalOverrides,
+    initialAdvisories: initial.initialAdvisories,
+    pkgJsonDepChanges,
+  });
+
+  if (options.summary !== false) {
+    renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+  }
+
+  const totalElapsed = formatDuration(Date.now() - startedAt);
+  logger.success(
+    dryRun
+      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
+  );
+
+  return summaryToResult(summary);
+}
+
+interface PreparedRun {
+  logger: Logger;
+  progressLogger: ReturnType<typeof createProgressLogger>;
+  state: WorkspaceState;
+  pnpm: PnpmRunner;
+  dryRun: boolean;
+  skipAudit: boolean;
+  startedAt: number;
+}
+
+async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   const logger = options.logger ?? consoleLogger;
   const dryRun = options.dryRun ?? false;
   const skipAudit = options.skipAudit ?? false;
@@ -145,21 +219,30 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
 
   logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
 
-  const confirm = options.confirm ?? defaultConfirmDestructive;
-  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
-    logger.info('Operation canceled by user.');
-    return {
-      canceled: true,
-      durationMs: Date.now() - startedAt,
-      catalogChanges: [],
-      overrideChanges: [],
-      initialAdvisories: [],
-      finalAdvisories: [],
-      fixedAdvisories: [],
-      summary: null,
-    };
-  }
+  return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
+}
 
+interface InitialState {
+  originalCatalog: ReadonlyMap<string, string>;
+  originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
+  workspaceName: string | undefined;
+  initialAdvisories: AdvisorySummary[];
+  /**
+   * Raw stdout of the pre-cleanup `pnpm audit --json`. Preserved separately
+   * because the package.json ranged-dep bump needs the locked-minimum view:
+   * for a dep declared as `^4.17.20` the fresh install resolves to the
+   * latest-in-range (e.g. 4.17.21, safe), so the post-cleanup audit no
+   * longer flags it. The pre-cleanup audit reflects the locked minimum and
+   * lets us still raise the declared floor to the safe minimum.
+   */
+  preCleanupAuditRaw: string;
+}
+
+async function captureInitialState(
+  state: WorkspaceState,
+  pnpm: PnpmRunner,
+  opts: { skipAudit: boolean; dryRun: boolean },
+): Promise<InitialState> {
   // Capture the original state BEFORE any cleanup mutates files. Used by
   // the run-summary at the end.
   const originalYaml = state.desiredWorkspaceYaml;
@@ -175,13 +258,8 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   // when audit-fix re-adds the same overrides. That would inflate the
   // "vulnerabilities fixed" count with non-changes.
   let initialAdvisories: AdvisorySummary[] = [];
-  // Also preserved for the package.json ranged-dep bump: when a dep is declared
-  // as `^4.17.20` the fresh install resolves to the latest-in-range (say
-  // 4.17.21 which is safe), so the post-cleanup audit no longer flags it.
-  // We must use the pre-cleanup audit — which reflects the locked minimums —
-  // to detect those cases and raise the declared floor to the safe minimum.
   let preCleanupAuditRaw = '';
-  if (!skipAudit && !dryRun) {
+  if (!opts.skipAudit && !opts.dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
       preCleanupAuditRaw = stdout;
@@ -192,110 +270,105 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     }
   }
 
-  // Cleanup phase ---------------------------------------------------------
+  return {
+    originalCatalog,
+    originalOverrides,
+    workspaceName,
+    initialAdvisories,
+    preCleanupAuditRaw,
+  };
+}
+
+async function runCleanupPhase(
+  state: WorkspaceState,
+  progressLogger: ReturnType<typeof createProgressLogger>,
+): Promise<void> {
   removePnpmLockFile(state, progressLogger);
   await removeNodeModulesFolders(state, progressLogger);
   removeWorkspaceOverridesBlock(state, progressLogger);
   removePackageJsonOverrides(state, progressLogger);
+}
 
-  // Install phase ---------------------------------------------------------
-  progressLogger.step('Install dependencies');
+async function runInstallAndDedupe(
+  pnpm: PnpmRunner,
+  state: WorkspaceState,
+  logger: Logger,
+  progressLogger: ReturnType<typeof createProgressLogger>,
+  opts: { skipDedupe: boolean; installLabel: string },
+): Promise<void> {
+  progressLogger.step(opts.installLabel);
   await runAndRestore(pnpm, state, logger, ['install']);
 
   progressLogger.step('Deduplicate dependency graph');
-  if (!options.skipDedupe) {
+  if (!opts.skipDedupe) {
     await runAndRestore(pnpm, state, logger, ['dedupe']);
   } else {
     logger.detail('Skipped dedupe (--no-dedupe).');
   }
+}
 
-  // Audit phase -----------------------------------------------------------
-  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-  if (!skipAudit) {
-    // Capture a post-cleanup audit JSON and share it with the pre-audit
-    // catalog bump (which needs the unmasked vulnerability set to decide
-    // which direct deps to bump). This is *separate* from the initial
-    // audit captured above for the summary.
-    const postCleanupAuditStdout = dryRun ? '' : (await pnpm.capture(['audit', '--json'])).stdout;
+async function runAuditPhase(
+  state: WorkspaceState,
+  pnpm: PnpmRunner,
+  logger: Logger,
+  progressLogger: ReturnType<typeof createProgressLogger>,
+  opts: {
+    skipDedupe: boolean;
+    allowMajor: boolean;
+    dryRun: boolean;
+    preCleanupAuditRaw: string;
+  },
+): Promise<PackageJsonDepChange[]> {
+  // Capture a post-cleanup audit JSON and share it with the pre-audit
+  // catalog bump (which needs the unmasked vulnerability set to decide
+  // which direct deps to bump). This is *separate* from the initial
+  // audit captured before cleanup for the summary.
+  const postCleanupAuditStdout = opts.dryRun
+    ? ''
+    : (await pnpm.capture(['audit', '--json'])).stdout;
 
-    pkgJsonDepChanges = await preAuditCatalogBump(
-      state,
-      pnpm,
-      progressLogger,
-      options.allowMajor ?? true,
-      postCleanupAuditStdout,
-      preCleanupAuditRaw,
-    );
-    await auditFix(state, pnpm, progressLogger);
-
-    progressLogger.step('Reinstall dependencies (post-audit reconciliation)');
-    await runAndRestore(pnpm, state, logger, ['install']);
-
-    progressLogger.step('Deduplicate dependency graph');
-    if (!options.skipDedupe) {
-      await runAndRestore(pnpm, state, logger, ['dedupe']);
-    } else {
-      logger.detail('Skipped dedupe (--no-dedupe).');
-    }
-  } else {
-    logger.detail('Skipped audit and catalog promotion (--no-audit).');
-  }
-
-  // Summary phase ---------------------------------------------------------
-  const summary = await emitRunSummary({
+  const pkgJsonDepChanges = await preAuditCatalogBump(
     state,
     pnpm,
-    logger,
-    enabled: options.summary !== false,
-    summaryFile: options.summaryFile,
-    skipAudit,
-    dryRun,
-    durationMs: Date.now() - startedAt,
-    toolVersion: pkg.version,
-    workspaceName,
-    originalCatalog,
-    originalOverrides,
-    initialAdvisories,
-    pkgJsonDepChanges,
-  });
-  const totalElapsed = formatDuration(Date.now() - startedAt);
-  logger.success(
-    dryRun
-      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
-      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
+    progressLogger,
+    opts.allowMajor,
+    postCleanupAuditStdout,
+    opts.preCleanupAuditRaw,
   );
+  await auditFix(state, pnpm, progressLogger);
 
-  // Programmatic result. When `summary` was disabled, fall back to a
-  // direct re-computation so callers always get diff data.
-  if (summary) {
-    const { fixed } = diffAdvisories(summary.initialAdvisories, summary.finalAdvisories);
-    return {
-      canceled: false,
-      durationMs: summary.durationMs,
-      catalogChanges: diffCatalog(summary.originalCatalog, summary.finalCatalog),
-      overrideChanges: diffOverrides(summary.originalOverrides, summary.finalOverrides),
-      initialAdvisories: summary.initialAdvisories,
-      finalAdvisories: summary.finalAdvisories,
-      fixedAdvisories: fixed,
-      summary,
-    };
-  }
+  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
+    skipDedupe: opts.skipDedupe,
+    installLabel: 'Reinstall dependencies (post-audit reconciliation)',
+  });
 
-  // summary: false branch — recompute the diffs without rendering.
-  const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
-  const finalPjText = safeReadFile(state.rootPackageJson);
-  const finalCatalog = readCatalogSnapshot(finalYaml);
-  const finalOverrides = readAllOverrides(finalYaml, finalPjText);
-  const { fixed } = diffAdvisories(initialAdvisories, []);
+  return pkgJsonDepChanges;
+}
+
+function canceledResult(durationMs: number): RefreshResult {
+  return {
+    canceled: true,
+    durationMs,
+    catalogChanges: [],
+    overrideChanges: [],
+    initialAdvisories: [],
+    finalAdvisories: [],
+    fixedAdvisories: [],
+    summary: null,
+  };
+}
+
+function summaryToResult(summary: RunSummaryData): RefreshResult {
+  const { fixed } = diffAdvisories(summary.initialAdvisories, summary.finalAdvisories);
   return {
     canceled: false,
-    durationMs: Date.now() - startedAt,
-    catalogChanges: diffCatalog(originalCatalog, finalCatalog),
-    overrideChanges: diffOverrides(originalOverrides, finalOverrides),
-    initialAdvisories,
-    finalAdvisories: [],
+    durationMs: summary.durationMs,
+    catalogChanges: diffCatalog(summary.originalCatalog, summary.finalCatalog),
+    overrideChanges: diffOverrides(summary.originalOverrides, summary.finalOverrides),
+    initialAdvisories: summary.initialAdvisories,
+    finalAdvisories: summary.finalAdvisories,
     fixedAdvisories: fixed,
-    summary: null,
+    summary,
   };
 }
 

@@ -4,8 +4,6 @@ import {
   collapseBlankLines,
   getCatalogNames,
   getCatalogVersions,
-  CATALOG_BLOCK_PATTERN,
-  OVERRIDES_BLOCK_PATTERN,
 } from '../src/catalog';
 
 const SAMPLE_LF = `packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n  '@scope/pkg': "1.0.0"\n  lodash: 4.17.21\n\noverrides:\n  semver: '^7.6.0'\n`;
@@ -97,16 +95,6 @@ describe('collapseBlankLines', () => {
   });
 });
 
-describe('block patterns', () => {
-  it('CATALOG_BLOCK_PATTERN matches catalog block', () => {
-    expect(CATALOG_BLOCK_PATTERN.exec(SAMPLE_LF)).toBeTruthy();
-  });
-
-  it('OVERRIDES_BLOCK_PATTERN matches overrides block', () => {
-    expect(OVERRIDES_BLOCK_PATTERN.exec(SAMPLE_LF)).toBeTruthy();
-  });
-});
-
 describe('AST-based catalog reads', () => {
   it('parses catalog entries with inline comments', () => {
     const yaml = "catalog:\n  react: '18.2.0' # pinned for compatibility\n  lodash: 4.17.21\n";
@@ -137,5 +125,47 @@ describe('AST-based catalog reads', () => {
 
   it('returns empty results when catalog key is absent', () => {
     expect(getCatalogNames("packages:\n  - 'apps/*'\n").size).toBe(0);
+  });
+
+  it('reads entries from named maps under `catalogs:`', () => {
+    const yaml =
+      "catalogs:\n  default:\n    react: '18.2.0'\n  legacy:\n    react: '17.0.2'\n    lodash: 4.17.21\n";
+    const names = getCatalogNames(yaml);
+    expect(names.has('react')).toBe(true);
+    expect(names.has('lodash')).toBe(true);
+    const versions = getCatalogVersions(yaml);
+    // `react` appears twice; the second occurrence wins (Map.set semantics).
+    expect(versions.get('react')).toBe('17.0.2');
+    expect(versions.get('lodash')).toBe('4.17.21');
+  });
+});
+
+describe('AST-based catalog writes', () => {
+  it('updates entries inside named maps under `catalogs:`', () => {
+    const yaml = "catalogs:\n  default:\n    react: '18.2.0'\n  legacy:\n    lodash: 4.17.20\n";
+    const out = applyCatalogUpdates(
+      yaml,
+      new Map([
+        ['react', '18.3.1'],
+        ['lodash', '4.17.21'],
+      ]),
+    );
+    expect(out).toContain("react: '18.3.1'");
+    expect(out).toContain('lodash: 4.17.21');
+  });
+
+  it('updates the canonical anchored value (alias resolves to the new version)', () => {
+    const yaml = "catalog:\n  react: &reactVer '18.2.0'\n  react-dom: *reactVer\n";
+    const out = applyCatalogUpdates(yaml, new Map([['react', '18.3.1']]));
+    expect(out).toContain("'18.3.1'");
+    // The alias is preserved; resolving the updated yaml yields the new version.
+    expect(getCatalogVersions(out).get('react-dom')).toBe('18.3.1');
+  });
+
+  it('preserves inline comments on updated entries', () => {
+    const yaml = "catalog:\n  react: '18.2.0' # pinned for compatibility\n";
+    const out = applyCatalogUpdates(yaml, new Map([['react', '18.3.1']]));
+    expect(out).toContain("react: '18.3.1'");
+    expect(out).toContain('# pinned for compatibility');
   });
 });

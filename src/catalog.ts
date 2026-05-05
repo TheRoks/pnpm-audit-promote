@@ -1,50 +1,81 @@
 /**
- * Regex-based pnpm-workspace.yaml manipulation that preserves formatting,
- * ordering, and quoting style. Reads use the `yaml` AST for robustness
- * (anchors, comments, nested mappings); writes stay regex-based so the
- * file's original formatting is preserved byte-for-byte.
+ * `pnpm-workspace.yaml` manipulation via the `yaml` AST. Reads and writes
+ * both go through `parseDocument`; comments, ordering, and quoting style
+ * are preserved by mutating `Scalar` nodes in place and serializing via
+ * `Document.toString()`.
  */
-import { parseDocument } from 'yaml';
+import {
+  parseDocument,
+  isMap,
+  isScalar,
+  isAlias,
+  Scalar,
+  type Document,
+  type YAMLMap,
+  type ParsedNode,
+} from 'yaml';
 
-export const OVERRIDES_BLOCK_PATTERN = /^(overrides:[ \t]*\r?\n((?:[ \t]+\S.*\r?\n?)+))/m;
+const CATALOG_KEY = 'catalog';
+const CATALOGS_KEY = 'catalogs';
 
-export const CATALOG_BLOCK_PATTERN = /^(catalog:[ \t]*\r?\n((?:[ \t]+\S.*\r?\n?)+))/m;
+type Doc = Document.Parsed<ParsedNode, true>;
+
+function tryParse(yaml: string): Doc | null {
+  let doc: Doc;
+  try {
+    doc = parseDocument(yaml, { keepSourceTokens: false }) as Doc;
+  } catch {
+    return null;
+  }
+  if (doc.errors.length > 0) return null;
+  return doc;
+}
 
 /**
- * Pattern matching a single `name: value` mapping line in YAML, capturing
- * the (possibly quoted) name into one of three groups.
+ * Return every catalog mapping in the document: the top-level `catalog:` map,
+ * plus every named map inside `catalogs:` (pnpm 10 supports multiple named
+ * catalogs).
  */
-export const YAML_KEY_PATTERN = /^\s+(?:'([^']+)'|"([^"]+)"|([^\s:]+))\s*:/;
+function getCatalogMaps(doc: Doc): YAMLMap[] {
+  const out: YAMLMap[] = [];
+  const top = doc.get(CATALOG_KEY, true);
+  if (isMap(top)) out.push(top);
+  const named = doc.get(CATALOGS_KEY, true);
+  if (isMap(named)) {
+    for (const item of named.items) {
+      if (isMap(item.value)) out.push(item.value);
+    }
+  }
+  return out;
+}
 
-function readCatalogMap(yaml: string): Map<string, string | null> {
+function readCatalogMapFromDoc(doc: Doc): Map<string, string | null> {
   const result = new Map<string, string | null>();
-  let doc;
-  try {
-    doc = parseDocument(yaml, { keepSourceTokens: false });
-  } catch {
-    return result;
-  }
-  // Bail on parse errors so malformed input never produces partial results.
-  if (doc.errors.length > 0) return result;
-
-  // `toJS` resolves aliases and produces plain JS values, which is what we
-  // want for read-only inspection.
-  let raw: unknown;
-  try {
-    raw = doc.toJS();
-  } catch {
-    return result;
-  }
-  if (typeof raw !== 'object' || raw === null) return result;
-  const catalog = (raw as { catalog?: unknown }).catalog;
-  if (typeof catalog !== 'object' || catalog === null) return result;
-
-  for (const [name, value] of Object.entries(catalog as Record<string, unknown>)) {
-    if (typeof value === 'string') result.set(name, value);
-    else if (typeof value === 'number') result.set(name, String(value));
-    else result.set(name, null);
+  for (const map of getCatalogMaps(doc)) {
+    for (const item of map.items) {
+      const k = isScalar(item.key) ? String(item.key.value) : null;
+      if (k === null) continue;
+      let value: string | null = null;
+      let node: unknown = item.value;
+      if (isAlias(node)) {
+        const resolved = node.resolve(doc);
+        if (resolved !== undefined) node = resolved;
+      }
+      if (isScalar(node)) {
+        const v = node.value;
+        if (typeof v === 'string') value = v;
+        else if (typeof v === 'number') value = String(v);
+      }
+      result.set(k, value);
+    }
   }
   return result;
+}
+
+function readCatalogMap(yaml: string): Map<string, string | null> {
+  const doc = tryParse(yaml);
+  if (!doc) return new Map();
+  return readCatalogMapFromDoc(doc);
 }
 
 /** Get catalog package names from the given workspace yaml content. */
@@ -58,14 +89,7 @@ export function getCatalogNames(yaml: string): Set<string> {
  * (e.g. `$ref` aliases) are omitted.
  */
 export function getCatalogVersions(yaml: string): Map<string, string> {
-  const versions = new Map<string, string>();
-  for (const [name, raw] of readCatalogMap(yaml)) {
-    if (!raw) continue;
-    if (raw.startsWith('$')) continue;
-    const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(raw)?.[1];
-    if (concrete) versions.set(name, concrete);
-  }
-  return versions;
+  return extractConcreteVersions(readCatalogMap(yaml));
 }
 
 /**
@@ -74,7 +98,10 @@ export function getCatalogVersions(yaml: string): Map<string, string> {
  */
 export function readCatalog(yaml: string): { names: Set<string>; versions: Map<string, string> } {
   const raw = readCatalogMap(yaml);
-  const names = new Set(raw.keys());
+  return { names: new Set(raw.keys()), versions: extractConcreteVersions(raw) };
+}
+
+function extractConcreteVersions(raw: Map<string, string | null>): Map<string, string> {
   const versions = new Map<string, string>();
   for (const [name, value] of raw) {
     if (!value) continue;
@@ -82,50 +109,70 @@ export function readCatalog(yaml: string): { names: Set<string>; versions: Map<s
     const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(value)?.[1];
     if (concrete) versions.set(name, concrete);
   }
-  return { names, versions };
+  return versions;
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Apply catalog version updates in-place on the parsed document. Returns
+ * `true` when any scalar was modified. Preserves the original quoting style
+ * because each scalar's `type` (PLAIN / QUOTE_SINGLE / QUOTE_DOUBLE) is left
+ * untouched.
+ *
+ * Internal helper — exported so callers that already have a parsed document
+ * (e.g. the overrides promoter) can reuse it without re-parsing.
+ */
+export function applyCatalogUpdatesToDoc(doc: Doc, updates: ReadonlyMap<string, string>): boolean {
+  if (updates.size === 0) return false;
+  let modified = false;
+  for (const map of getCatalogMaps(doc)) {
+    for (const item of map.items) {
+      const k = isScalar(item.key) ? String(item.key.value) : null;
+      if (k === null) continue;
+      const next = updates.get(k);
+      if (next === undefined) continue;
+      if (isScalar(item.value)) {
+        if (item.value.value !== next) {
+          item.value.value = next;
+          modified = true;
+        }
+      } else if (item.value == null) {
+        // Promote a key with no value (rare, but legal) to a plain scalar.
+        item.value = new Scalar(next) as unknown as typeof item.value;
+        modified = true;
+      }
+      // Non-scalar values (nested maps/sequences) are left alone — outside scope.
+    }
+  }
+  return modified;
 }
 
 /**
  * Apply catalog version updates to the workspace yaml text.
  * `updates` maps package name -> concrete version.
- *
- * NOTE: the trailing capture is `[ \t]*` (NOT `\s*`) because `\s` matches
- * newlines and would silently swallow following lines under multiline mode.
  */
 export function applyCatalogUpdates(yaml: string, updates: ReadonlyMap<string, string>): string {
   if (updates.size === 0) return yaml;
+  const doc = tryParse(yaml);
+  if (!doc) return yaml;
+  if (!applyCatalogUpdatesToDoc(doc, updates)) return yaml;
+  return serializeDoc(doc, yaml);
+}
 
-  const cm = CATALOG_BLOCK_PATTERN.exec(yaml);
-  if (!cm) return yaml;
-
-  let catalogBody = cm[2] ?? '';
-  for (const [name, version] of updates) {
-    const escaped = escapeRegex(name);
-    const entry = new RegExp(
-      `^(\\s+(?:'${escaped}'|"${escaped}"|${escaped})\\s*:\\s*)(?:'([^']*)'|"([^"]*)"|(\\S+))([ \\t]*)$`,
-      'gm',
-    );
-    catalogBody = catalogBody.replace(
-      entry,
-      (_match, prefix: string, sq?: string, dq?: string, _bare?: string, trail?: string) => {
-        let wrapped: string;
-        if (sq !== undefined) wrapped = `'${version}'`;
-        else if (dq !== undefined) wrapped = `"${version}"`;
-        else wrapped = version;
-        return `${prefix}${wrapped}${trail ?? ''}`;
-      },
-    );
+/**
+ * Stringify `doc` while restoring the original document's EOL convention.
+ * `yaml@2` always emits LF; we re-insert CRLF when the source used it.
+ */
+export function serializeDoc(doc: Doc, original: string): string {
+  const out = doc.toString({ lineWidth: 0 });
+  if (original.includes('\r\n') && !out.includes('\r\n')) {
+    return out.replace(/\n/g, '\r\n');
   }
+  return out;
+}
 
-  const eolMatch = /\r?\n/.exec(yaml);
-  const eol = eolMatch?.[0] ?? '\n';
-  return (
-    yaml.slice(0, cm.index) + 'catalog:' + eol + catalogBody + yaml.slice(cm.index + cm[0].length)
-  );
+/** Re-export `parseDocument` wrapper for callers that need a parsed doc. */
+export function parseWorkspaceDoc(yaml: string): Doc | null {
+  return tryParse(yaml);
 }
 
 /** Collapse 3+ consecutive newlines down to a single blank line. */

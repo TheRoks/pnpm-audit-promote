@@ -9,6 +9,7 @@ import {
   readWorkspaceOverrides,
   renderTerminalSummary,
   type AdvisorySummary,
+  type PackageJsonDepChange,
   type RunSummaryData,
 } from '../src/summary';
 
@@ -247,6 +248,7 @@ describe('renderTerminalSummary', () => {
         },
       ],
       finalAdvisories: [],
+      pkgJsonDepChanges: [],
       ...overrides,
     };
   }
@@ -261,6 +263,8 @@ describe('renderTerminalSummary', () => {
     expect(out).toMatch(/0 remaining/);
     expect(out).toMatch(/Direct dependencies \(catalog\)/);
     expect(out).toMatch(/react\s+18\.2\.0\s+→\s+18\.3\.1\s+MINOR/);
+    expect(out).toMatch(/Direct dependencies \(package\.json files\)/);
+    expect(out).toMatch(/No package\.json versions changed\./);
     expect(out).toMatch(/Transitive overrides/);
     expect(out).toMatch(/vite@<6\.4\.1/);
     expect(out).toMatch(/>=6\.4\.2/);
@@ -280,8 +284,32 @@ describe('renderTerminalSummary', () => {
       { color: false },
     );
     expect(out).toMatch(/No catalog versions changed\./);
+    expect(out).toMatch(/No package\.json versions changed\./);
     expect(out).toMatch(/No override changes\./);
     expect(out).toMatch(/No vulnerabilities were resolved during this run\./);
+  });
+
+  it('renders package.json dep changes in the new section and updates headline count', () => {
+    const change: PackageJsonDepChange = {
+      pkgJsonPath: '/repo/packages/app/package.json',
+      name: 'lodash',
+      before: '^4.17.20',
+      after: '^4.17.21',
+      bump: 'patch',
+    };
+    const out = renderTerminalSummary(
+      fixture({
+        originalCatalog: new Map(),
+        finalCatalog: new Map(),
+        pkgJsonDepChanges: [change],
+      }),
+      { color: false },
+    );
+    // Headline: catalog (0) + pkg.json (1) = 1
+    expect(out).toMatch(/1 direct package updated/);
+    expect(out).toMatch(/No catalog versions changed\./);
+    expect(out).toMatch(/Direct dependencies \(package\.json files\)/);
+    expect(out).toMatch(/lodash\s+\^4\.17\.20\s+→\s+\^4\.17\.21\s+PATCH/);
   });
 
   it('shows dry-run note when applicable', () => {

@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { consoleLogger, type Logger } from './logger';
 import { WorkspaceState } from './workspace';
 import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm';
@@ -8,6 +9,10 @@ import {
   removeWorkspaceOverridesBlock,
 } from './cleanup';
 import { getDirectDepCatalogBumps } from './audit/parseAdvisories';
+import {
+  applyPackageJsonDepBumps,
+  getDirectDepPackageJsonBumps,
+} from './audit/bumpPackageJsonDeps';
 import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
 import { applyCatalogUpdates } from './catalog';
@@ -26,6 +31,7 @@ import type {
   AdvisorySummary,
   CatalogChange,
   OverrideChange,
+  PackageJsonDepChange,
   RunSummaryData,
 } from './summary/types';
 import { createProgressLogger } from './progress';
@@ -169,9 +175,16 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   // when audit-fix re-adds the same overrides. That would inflate the
   // "vulnerabilities fixed" count with non-changes.
   let initialAdvisories: AdvisorySummary[] = [];
+  // Also preserved for the package.json ranged-dep bump: when a dep is declared
+  // as `^4.17.20` the fresh install resolves to the latest-in-range (say
+  // 4.17.21 which is safe), so the post-cleanup audit no longer flags it.
+  // We must use the pre-cleanup audit — which reflects the locked minimums —
+  // to detect those cases and raise the declared floor to the safe minimum.
+  let preCleanupAuditRaw = '';
   if (!skipAudit && !dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
+      preCleanupAuditRaw = stdout;
       initialAdvisories = extractAdvisories(stdout);
     } catch {
       // Best-effort: a missing lockfile or other audit failure leaves the
@@ -197,6 +210,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   }
 
   // Audit phase -----------------------------------------------------------
+  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
   if (!skipAudit) {
     // Capture a post-cleanup audit JSON and share it with the pre-audit
     // catalog bump (which needs the unmasked vulnerability set to decide
@@ -204,12 +218,13 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     // audit captured above for the summary.
     const postCleanupAuditStdout = dryRun ? '' : (await pnpm.capture(['audit', '--json'])).stdout;
 
-    await preAuditCatalogBump(
+    pkgJsonDepChanges = await preAuditCatalogBump(
       state,
       pnpm,
       progressLogger,
       options.allowMajor ?? true,
       postCleanupAuditStdout,
+      preCleanupAuditRaw,
     );
     await auditFix(state, pnpm, progressLogger);
 
@@ -241,9 +256,8 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     originalCatalog,
     originalOverrides,
     initialAdvisories,
+    pkgJsonDepChanges,
   });
-
-  logger.raw('');
   const totalElapsed = formatDuration(Date.now() - startedAt);
   logger.success(
     dryRun
@@ -303,29 +317,61 @@ async function preAuditCatalogBump(
   logger: Logger,
   allowMajor: boolean,
   auditJsonStdout: string,
-): Promise<void> {
+  preCleanupAuditRaw: string,
+): Promise<PackageJsonDepChange[]> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
   const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
     allowMajor,
     auditJsonStdout,
   });
+  // For package.json ranged deps (^/~), the post-cleanup install may resolve
+  // to a safe-in-range version that makes the advisory disappear from the
+  // post-install audit. Use the pre-cleanup audit (locked minimums) as the
+  // primary source so we still raise the declared floor. Fall back to the
+  // post-cleanup data when there was no pre-existing lock file.
+  const pkgJsonAuditStdout = preCleanupAuditRaw || auditJsonStdout;
+  const pkgJsonBumps = await getDirectDepPackageJsonBumps(state, pnpm, logger, {
+    allowMajor,
+    auditJsonStdout: pkgJsonAuditStdout,
+  });
+
   logger.step('Reinstall dependencies after catalog updates');
-  if (bumps.size === 0) {
-    logger.detail('No vulnerable direct dependencies detected in catalog-managed packages.');
+  if (bumps.size === 0 && pkgJsonBumps.length === 0) {
+    logger.detail('No vulnerable direct dependencies detected (catalog or package.json).');
     logger.detail('Skipped reinstall: no catalog updates were required.');
-    return;
+    return [];
   }
 
-  logger.detail('Applying catalog updates for vulnerable direct dependencies:');
-  for (const [k, v] of bumps) {
-    const annotation = tiers.get(k) === 'major' ? ' (MAJOR)' : '';
-    logger.bullet(`${k} -> ${v}${annotation}`);
+  if (bumps.size > 0) {
+    logger.detail('Applying catalog updates for vulnerable direct dependencies:');
+    for (const [k, v] of bumps) {
+      const annotation = tiers.get(k) === 'major' ? ' (MAJOR)' : '';
+      logger.bullet(`${k} -> ${v}${annotation}`);
+    }
+    state.desiredWorkspaceYaml = applyCatalogUpdates(state.desiredWorkspaceYaml, bumps);
+    state.saveWorkspaceYaml(state.desiredWorkspaceYaml);
   }
 
-  state.desiredWorkspaceYaml = applyCatalogUpdates(state.desiredWorkspaceYaml, bumps);
-  state.saveWorkspaceYaml(state.desiredWorkspaceYaml);
+  if (pkgJsonBumps.length > 0) {
+    logger.detail('Applying package.json updates for vulnerable direct dependencies:');
+    for (const bump of pkgJsonBumps) {
+      const rel = path.relative(state.workspaceRoot, bump.pkgJsonPath);
+      const annotation = bump.tier === 'major' ? ' (MAJOR)' : '';
+      logger.bullet(`${bump.name} (${rel}): ${bump.before} -> ${bump.after}${annotation}`);
+    }
+    applyPackageJsonDepBumps(pkgJsonBumps, state.dryRun);
+  }
 
   await runAndRestore(pnpm, state, logger, ['install']);
+
+  // Convert PackageJsonDepBump[] → PackageJsonDepChange[] for the summary.
+  return pkgJsonBumps.map((b) => ({
+    pkgJsonPath: b.pkgJsonPath,
+    name: b.name,
+    before: b.before,
+    after: b.after,
+    bump: b.tier,
+  }));
 }
 
 async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger): Promise<void> {

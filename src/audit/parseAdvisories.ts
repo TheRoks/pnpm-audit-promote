@@ -157,7 +157,7 @@ export async function getDirectDepCatalogBumps(
   return { bumps, tiers };
 }
 
-function advisoryAppliesToCurrent(
+export function advisoryAppliesToCurrent(
   current: string | undefined,
   vulnerableRange: string | undefined,
 ): boolean {
@@ -176,7 +176,7 @@ function advisoryAppliesToCurrent(
  * same package appears in multiple advisories. Returns `[]` on any failure
  * so callers transparently fall back to `semver.minVersion`-based logic.
  */
-async function getAvailableVersions(
+export async function getAvailableVersions(
   pnpm: PnpmRunner,
   module: string,
   cache: Map<string, string[]>,

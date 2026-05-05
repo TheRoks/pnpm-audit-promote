@@ -4,7 +4,7 @@ import type { PnpmRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
 import { extractAdvisories, readAllOverrides, readCatalogSnapshot, safeReadFile } from './collect';
 import { renderTerminalSummary } from './render';
-import type { AdvisorySummary, RunSummaryData } from './types';
+import type { AdvisorySummary, PackageJsonDepChange, RunSummaryData } from './types';
 
 export interface EmitRunSummaryArgs {
   state: WorkspaceState;
@@ -22,6 +22,8 @@ export interface EmitRunSummaryArgs {
   originalCatalog: ReadonlyMap<string, string>;
   originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
   initialAdvisories: readonly AdvisorySummary[];
+  /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
+  pkgJsonDepChanges: readonly PackageJsonDepChange[];
 }
 
 /**
@@ -62,6 +64,7 @@ export async function emitRunSummary(args: EmitRunSummaryArgs): Promise<RunSumma
     finalOverrides,
     initialAdvisories: args.initialAdvisories,
     finalAdvisories,
+    pkgJsonDepChanges: args.pkgJsonDepChanges,
   };
 
   const colored = renderTerminalSummary(summary, { color: true });

@@ -2,8 +2,8 @@
 import * as path from 'node:path';
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { refreshDeps } from './refresh.js';
-import { createLogger, type LogLevel } from './logger.js';
+import { refreshDeps } from './refresh';
+import { createLogger, type LogLevel } from './logger';
 import pkg from '../package.json' with { type: 'json' };
 
 const { version: PKG_VERSION } = pkg;

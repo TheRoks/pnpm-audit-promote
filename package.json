@@ -45,9 +45,9 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsdown",
     "clean": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -55,6 +55,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
+    "dev": "tsx src/cli.ts",
     "check:exports": "publint && attw --pack --ignore-rules cjs-resolves-to-esm",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run check:exports",
     "start": "node dist/cli.js"
@@ -79,6 +80,8 @@
     "eslint": "^10.2.1",
     "prettier": "^3.3.3",
     "publint": "^0.3.18",
+    "tsdown": "^0.21.10",
+    "tsx": "^4.19.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.1",
     "vite": "^8.0.10",

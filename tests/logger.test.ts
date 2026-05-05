@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLogger } from '../src/logger.js';
+import { createLogger } from '../src/logger';
 
 describe('createLogger verbosity behavior', () => {
   it('suppresses trace output at normal level', () => {

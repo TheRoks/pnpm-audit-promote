@@ -1,16 +1,16 @@
-import { consoleLogger, type Logger } from './logger.js';
-import { WorkspaceState } from './workspace.js';
-import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm.js';
+import { consoleLogger, type Logger } from './logger';
+import { WorkspaceState } from './workspace';
+import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm';
 import {
   removeNodeModulesFolders,
   removePackageJsonOverrides,
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
-} from './cleanup.js';
-import { getDirectDepCatalogBumps } from './audit/parseAdvisories.js';
-import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides.js';
-import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides.js';
-import { applyCatalogUpdates } from './catalog.js';
+} from './cleanup';
+import { getDirectDepCatalogBumps } from './audit/parseAdvisories';
+import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
+import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
+import { applyCatalogUpdates } from './catalog';
 import {
   extractAdvisories,
   diffAdvisories,
@@ -19,17 +19,17 @@ import {
   readAllOverrides,
   readCatalogSnapshot,
   safeReadFile,
-} from './summary/collect.js';
-import { emitRunSummary } from './summary/emit.js';
-import { formatDuration } from './summary/render.js';
+} from './summary/collect';
+import { emitRunSummary } from './summary/emit';
+import { formatDuration } from './summary/render';
 import type {
   AdvisorySummary,
   CatalogChange,
   OverrideChange,
   RunSummaryData,
-} from './summary/types.js';
-import { createProgressLogger } from './progress.js';
-import { defaultConfirmDestructive, type ConfirmFn } from './prompt.js';
+} from './summary/types';
+import { createProgressLogger } from './progress';
+import { defaultConfirmDestructive, type ConfirmFn } from './prompt';
 import pkg from '../package.json' with { type: 'json' };
 
 export interface RefreshOptions {

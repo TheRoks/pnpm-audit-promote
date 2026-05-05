@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 import semver from 'semver';
-import type { Logger } from '../logger.js';
-import type { WorkspaceState } from '../workspace.js';
-import { applyCatalogUpdates, readCatalog } from '../catalog.js';
-import { findMatchingBrace } from '../jsonEdit.js';
-import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil.js';
-import { reportPromotions } from './bumpReporting.js';
-import { collapseRedundantQualifiedPackageJsonOverrides } from './overrideCollapse.js';
+import type { Logger } from '../logger';
+import type { WorkspaceState } from '../workspace';
+import { applyCatalogUpdates, readCatalog } from '../catalog';
+import { findMatchingBrace } from '../jsonEdit';
+import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil';
+import { reportPromotions } from './bumpReporting';
+import { collapseRedundantQualifiedPackageJsonOverrides } from './overrideCollapse';
 
 /**
  * Promote direct-dependency audit fixes from the root package.json's

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findMatchingBrace, removeJsonProperty } from '../src/jsonEdit.js';
+import { findMatchingBrace, removeJsonProperty } from '../src/jsonEdit';
 
 describe('findMatchingBrace', () => {
   it('finds matching brace at top level', () => {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Logger } from '../src/logger.js';
+import type { Logger } from '../src/logger';
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -8,7 +8,7 @@ vi.mock('cross-spawn', () => ({
   default: spawnMock,
 }));
 
-import { createPnpmRunner, ensurePnpmAvailable } from '../src/pnpm.js';
+import { createPnpmRunner, ensurePnpmAvailable } from '../src/pnpm';
 
 function makeLogger(): Logger {
   return {

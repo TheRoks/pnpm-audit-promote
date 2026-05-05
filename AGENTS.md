@@ -53,12 +53,15 @@ helper modules. `PnpmRunner` is injectable so tests never shell out to real pnpm
 
 ## TypeScript conventions
 
-- **ESM only** — `"type": "module"`, NodeNext module resolution
-- **Import paths must use `.js` extension** even for `.ts` source files:
-  `import { foo } from './bar.js'`
-- **Inline type imports**: `import { type Foo, bar } from './baz.js'`
+- **ESM only** — `"type": "module"`, bundler module resolution
+- **Extensionless relative imports**: `import { foo } from './bar'`
+  (tsdown rewrites these to `.js` for the published Node ESM build; an
+  ESLint rule blocks `.js` extensions on relative imports in source)
+- **Inline type imports**: `import { type Foo, bar } from './baz'`
   (ESLint rule `@typescript-eslint/consistent-type-imports` is enforced)
-- Strict mode: `strict`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax` are on
+- Strict mode: `strict`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`,
+  `noUnusedLocals`, `noUnusedParameters`, `noPropertyAccessFromIndexSignature`
+  are on (see `tsconfig.base.json`)
 
 ## Testing conventions
 

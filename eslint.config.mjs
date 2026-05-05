@@ -19,6 +19,15 @@ export default tseslint.config(
         { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
       ],
       'no-console': 'off',
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'ImportDeclaration[source.value=/^\\.\\.?\\/.*\\.js$/], ExportNamedDeclaration[source.value=/^\\.\\.?\\/.*\\.js$/], ExportAllDeclaration[source.value=/^\\.\\.?\\/.*\\.js$/]',
+          message:
+            "Use extensionless relative imports in TypeScript source. tsdown rewrites them to '.js' for the published Node ESM build.",
+        },
+      ],
     },
   },
   {

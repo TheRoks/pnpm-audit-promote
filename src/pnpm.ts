@@ -1,6 +1,6 @@
 import spawn from 'cross-spawn';
-import { type Logger } from './logger.js';
-import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors.js';
+import { type Logger } from './logger';
+import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors';
 
 export interface PnpmRunner {
   /** Run pnpm and throw on non-zero exit. */

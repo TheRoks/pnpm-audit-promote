@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createLogger } from '../src/logger.js';
+import { createLogger } from '../src/logger';
 import {
   removeNodeModulesFolders,
   removePackageJsonOverrides,
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
-} from '../src/cleanup.js';
-import { WorkspaceState } from '../src/workspace.js';
+} from '../src/cleanup';
+import { WorkspaceState } from '../src/workspace';
 
 let tmp: string;
 

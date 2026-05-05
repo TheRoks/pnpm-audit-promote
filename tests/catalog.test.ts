@@ -6,7 +6,7 @@ import {
   getCatalogVersions,
   CATALOG_BLOCK_PATTERN,
   OVERRIDES_BLOCK_PATTERN,
-} from '../src/catalog.js';
+} from '../src/catalog';
 
 const SAMPLE_LF = `packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n  '@scope/pkg': "1.0.0"\n  lodash: 4.17.21\n\noverrides:\n  semver: '^7.6.0'\n`;
 

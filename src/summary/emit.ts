@@ -1,15 +1,10 @@
 import * as fs from 'node:fs';
-import type { Logger } from '../logger.js';
-import type { PnpmRunner } from '../pnpm.js';
-import type { WorkspaceState } from '../workspace.js';
-import {
-  extractAdvisories,
-  readAllOverrides,
-  readCatalogSnapshot,
-  safeReadFile,
-} from './collect.js';
-import { renderTerminalSummary } from './render.js';
-import type { AdvisorySummary, RunSummaryData } from './types.js';
+import type { Logger } from '../logger';
+import type { PnpmRunner } from '../pnpm';
+import type { WorkspaceState } from '../workspace';
+import { extractAdvisories, readAllOverrides, readCatalogSnapshot, safeReadFile } from './collect';
+import { renderTerminalSummary } from './render';
+import type { AdvisorySummary, RunSummaryData } from './types';
 
 export interface EmitRunSummaryArgs {
   state: WorkspaceState;

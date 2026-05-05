@@ -1,5 +1,5 @@
 import * as readline from 'node:readline';
-import { NonInteractiveConfirmationError } from './errors.js';
+import { NonInteractiveConfirmationError } from './errors';
 
 export interface ConfirmContext {
   /** When true, the prompt should auto-resolve to true. */

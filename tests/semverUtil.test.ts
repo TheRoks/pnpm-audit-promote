@@ -5,7 +5,7 @@ import {
   getConcreteVersion,
   isPlainPackageName,
   selectSafeBump,
-} from '../src/semverUtil.js';
+} from '../src/semverUtil';
 
 describe('compareSemVer', () => {
   it('compares basic versions', () => {

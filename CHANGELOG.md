@@ -1,5 +1,12 @@
 # pnpm-audit-promote
 
+## [1.4.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.3.0...v1.4.0) (2026-05-05)
+
+
+### Features
+
+* enhance dependency management by applying package.json version bumps ([#21](https://github.com/TheRoks/pnpm-audit-promote/issues/21)) ([dc91069](https://github.com/TheRoks/pnpm-audit-promote/commit/dc91069785ec2a888ee0bd321dd217f1bc0305d8))
+
 ## [1.3.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.2.0...v1.3.0) (2026-05-04)
 
 

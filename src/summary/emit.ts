@@ -6,14 +6,13 @@ import { extractAdvisories, readAllOverrides, readCatalogSnapshot, safeReadFile 
 import { renderTerminalSummary } from './render';
 import type { AdvisorySummary, PackageJsonDepChange, RunSummaryData } from './types';
 
-export interface EmitRunSummaryArgs {
+/**
+ * Inputs needed to assemble a {@link RunSummaryData} after the orchestrator
+ * has finished its work. Pure-data; no rendering side effects.
+ */
+export interface CollectRunSummaryArgs {
   state: WorkspaceState;
   pnpm: PnpmRunner;
-  logger: Logger;
-  /** When false, summary emission is skipped entirely. */
-  enabled: boolean;
-  /** Optional path to write a plain-text copy of the summary. */
-  summaryFile?: string;
   skipAudit: boolean;
   dryRun: boolean;
   durationMs: number;
@@ -27,14 +26,12 @@ export interface EmitRunSummaryArgs {
 }
 
 /**
- * Capture the post-run state, render a terminal-pretty summary, and
- * (optionally) write a plain-text copy to `summaryFile`. Returns the
- * computed {@link RunSummaryData} (or `null` if disabled) so callers
- * can expose it programmatically.
+ * Capture the post-run state and return a {@link RunSummaryData} struct.
+ * Always succeeds; a failed final audit leaves `finalAdvisories` empty
+ * rather than throwing.
  */
-export async function emitRunSummary(args: EmitRunSummaryArgs): Promise<RunSummaryData | null> {
-  if (!args.enabled) return null;
-  const { state, pnpm, logger, skipAudit, dryRun } = args;
+export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<RunSummaryData> {
+  const { state, pnpm, skipAudit, dryRun } = args;
 
   const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
   const finalPjText = safeReadFile(state.rootPackageJson);
@@ -51,7 +48,7 @@ export async function emitRunSummary(args: EmitRunSummaryArgs): Promise<RunSumma
     }
   }
 
-  const summary: RunSummaryData = {
+  return {
     workspaceRoot: state.workspaceRoot,
     workspaceName: args.workspaceName,
     toolVersion: args.toolVersion,
@@ -66,20 +63,33 @@ export async function emitRunSummary(args: EmitRunSummaryArgs): Promise<RunSumma
     finalAdvisories,
     pkgJsonDepChanges: args.pkgJsonDepChanges,
   };
+}
+
+export interface RenderRunSummaryArgs {
+  logger: Logger;
+  /** Optional path to write a plain-text copy of the summary. */
+  summaryFile?: string;
+  dryRun: boolean;
+}
+
+/**
+ * Render `summary` to the terminal (color) and optionally write a plain-text
+ * copy to `summaryFile`.
+ */
+export function renderRunSummary(summary: RunSummaryData, args: RenderRunSummaryArgs): void {
+  const { logger, summaryFile, dryRun } = args;
 
   const colored = renderTerminalSummary(summary, { color: true });
   logger.raw('');
   logger.raw(colored);
 
-  if (args.summaryFile && !dryRun) {
+  if (summaryFile && !dryRun) {
     try {
       const plain = renderTerminalSummary(summary, { color: false });
-      fs.writeFileSync(args.summaryFile, plain + '\n', 'utf8');
-      logger.detail(`Wrote run summary to ${args.summaryFile}.`);
+      fs.writeFileSync(summaryFile, plain + '\n', 'utf8');
+      logger.detail(`Wrote run summary to ${summaryFile}.`);
     } catch (e) {
-      logger.warn(`Could not write summary to ${args.summaryFile}: ${(e as Error).message}.`);
+      logger.warn(`Could not write summary to ${summaryFile}: ${(e as Error).message}.`);
     }
   }
-
-  return summary;
 }

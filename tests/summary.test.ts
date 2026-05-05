@@ -10,7 +10,7 @@ import {
   renderTerminalSummary,
   type AdvisorySummary,
   type RunSummaryData,
-} from '../src/summary.js';
+} from '../src/summary';
 
 describe('extractAdvisories', () => {
   it('parses a typical pnpm audit JSON payload', () => {

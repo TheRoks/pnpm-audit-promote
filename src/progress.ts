@@ -1,4 +1,4 @@
-import type { Logger } from './logger.js';
+import type { Logger } from './logger';
 
 /**
  * Wrap a logger so its `step()` emits numbered progress lines like

@@ -2,9 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
-import type { Logger } from './logger.js';
-import { PRUNED_DIR_NAMES } from './fsWalk.js';
-import { WorkspaceNotFoundError } from './errors.js';
+import type { Logger } from './logger';
+import { PRUNED_DIR_NAMES } from './fsWalk';
+import { WorkspaceNotFoundError } from './errors';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.

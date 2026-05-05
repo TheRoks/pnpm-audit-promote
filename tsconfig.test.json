@@ -1,9 +1,9 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*", "tests/**/*", "scripts/**/*"]
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*", "tsdown.config.ts", "vitest.config.ts"]
 }

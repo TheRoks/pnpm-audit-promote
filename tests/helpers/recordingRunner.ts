@@ -1,4 +1,4 @@
-import type { PnpmRunner } from '../../src/pnpm.js';
+import type { PnpmRunner } from '../../src/pnpm';
 
 export interface RecordedCall {
   args: string[];

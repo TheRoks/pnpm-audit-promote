@@ -5,14 +5,14 @@
  */
 import * as fs from 'node:fs';
 import semver from 'semver';
-import { getCatalogVersions } from '../catalog.js';
+import { getCatalogVersions } from '../catalog';
 import {
   SEVERITY_RANK,
   type AdvisorySummary,
   type CatalogChange,
   type OverrideChange,
   type Severity,
-} from './types.js';
+} from './types';
 
 const PNPM_AUDIT_SEVERITIES = new Set<Severity>([
   'critical',
@@ -43,19 +43,19 @@ export function extractAdvisories(jsonStdout: string): AdvisorySummary[] {
   for (const [id, entry] of Object.entries(advisories)) {
     if (!entry || typeof entry !== 'object') continue;
     const a = entry as Record<string, unknown>;
-    const sevRaw = typeof a.severity === 'string' ? a.severity.toLowerCase() : 'unknown';
+    const sevRaw = typeof a['severity'] === 'string' ? a['severity'].toLowerCase() : 'unknown';
     const severity: Severity = (PNPM_AUDIT_SEVERITIES as Set<string>).has(sevRaw)
       ? (sevRaw as Severity)
       : 'unknown';
-    const cves = Array.isArray(a.cves)
-      ? a.cves.filter((c): c is string => typeof c === 'string')
+    const cves = Array.isArray(a['cves'])
+      ? a['cves'].filter((c): c is string => typeof c === 'string')
       : [];
     out.push({
       id,
-      module: typeof a.module_name === 'string' ? a.module_name : '',
+      module: typeof a['module_name'] === 'string' ? a['module_name'] : '',
       severity,
-      title: typeof a.title === 'string' ? a.title : '',
-      url: typeof a.url === 'string' ? a.url : undefined,
+      title: typeof a['title'] === 'string' ? a['title'] : '',
+      url: typeof a['url'] === 'string' ? a['url'] : undefined,
       cves,
     });
   }

@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
-import { type Logger } from './logger.js';
-import type { WorkspaceState } from './workspace.js';
-import { resolveWorkspacePackageDirs } from './workspace.js';
-import { findNodeModulesFolders, findWorkspaceFiles } from './fsWalk.js';
-import { removeJsonProperty } from './jsonEdit.js';
-import { collapseBlankLines } from './catalog.js';
+import { type Logger } from './logger';
+import type { WorkspaceState } from './workspace';
+import { resolveWorkspacePackageDirs } from './workspace';
+import { findNodeModulesFolders, findWorkspaceFiles } from './fsWalk';
+import { removeJsonProperty } from './jsonEdit';
+import { collapseBlankLines } from './catalog';
 
 /**
  * Defense-in-depth: refuse to delete any path that does not resolve under the

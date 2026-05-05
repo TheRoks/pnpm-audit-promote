@@ -8,7 +8,7 @@ export type {
   OverrideChange,
   RunSummaryData,
   Severity,
-} from './summary/types.js';
+} from './summary/types';
 export {
   bumpTier,
   diffAdvisories,
@@ -20,5 +20,5 @@ export {
   readPackageJsonOverrides,
   readWorkspaceOverrides,
   safeReadFile,
-} from './summary/collect.js';
-export { renderTerminalSummary, type RenderOptions } from './summary/render.js';
+} from './summary/collect';
+export { renderTerminalSummary, type RenderOptions } from './summary/render';

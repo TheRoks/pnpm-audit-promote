@@ -4,7 +4,7 @@ import {
   isPlainPackageName,
   getBarePackageName,
   normalizeRange,
-} from '../semverUtil.js';
+} from '../semverUtil';
 
 /**
  * Pick the stronger (higher minimum) of two `>=X.Y.Z`-style fix ranges.

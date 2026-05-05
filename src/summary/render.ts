@@ -4,14 +4,14 @@
  * plain-text version suitable for writing to a file.
  */
 import pc from 'picocolors';
-import { getBarePackageName } from '../semverUtil.js';
-import { diffAdvisories, diffCatalog, diffOverrides } from './collect.js';
+import { getBarePackageName } from '../semverUtil';
+import { diffAdvisories, diffCatalog, diffOverrides } from './collect';
 import {
   type AdvisorySummary,
   type CatalogChange,
   type RunSummaryData,
   type Severity,
-} from './types.js';
+} from './types';
 
 export interface RenderOptions {
   /** When false, ANSI escape codes are stripped (for file output). */

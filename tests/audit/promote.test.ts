@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { WorkspaceState } from '../../src/workspace.js';
-import { silentLogger } from '../../src/logger.js';
-import { syncAuditOverridesIntoCatalog } from '../../src/audit/promoteWorkspaceOverrides.js';
-import { syncPackageJsonOverridesIntoCatalog } from '../../src/audit/promotePackageJsonOverrides.js';
+import { WorkspaceState } from '../../src/workspace';
+import { silentLogger } from '../../src/logger';
+import { syncAuditOverridesIntoCatalog } from '../../src/audit/promoteWorkspaceOverrides';
+import { syncPackageJsonOverridesIntoCatalog } from '../../src/audit/promotePackageJsonOverrides';
 
 let tmp: string;
 

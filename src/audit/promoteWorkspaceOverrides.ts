@@ -1,15 +1,15 @@
 import semver from 'semver';
-import type { Logger } from '../logger.js';
-import type { WorkspaceState } from '../workspace.js';
+import type { Logger } from '../logger';
+import type { WorkspaceState } from '../workspace';
 import {
   CATALOG_BLOCK_PATTERN,
   OVERRIDES_BLOCK_PATTERN,
   applyCatalogUpdates,
   collapseBlankLines,
   readCatalog,
-} from '../catalog.js';
-import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil.js';
-import { reportPromotions } from './bumpReporting.js';
+} from '../catalog';
+import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil';
+import { reportPromotions } from './bumpReporting';
 
 /**
  * Promote direct-dependency audit fixes from the workspace yaml `overrides:`

@@ -1,15 +1,15 @@
 import semver from 'semver';
-import type { Logger } from '../logger.js';
-import type { WorkspaceState } from '../workspace.js';
-import type { PnpmRunner } from '../pnpm.js';
-import { readCatalog } from '../catalog.js';
+import type { Logger } from '../logger';
+import type { WorkspaceState } from '../workspace';
+import type { PnpmRunner } from '../pnpm';
+import { readCatalog } from '../catalog';
 import {
   compareSemVer,
   getConcreteVersion,
   normalizeRange,
   selectSafeBump,
   type BumpTier,
-} from '../semverUtil.js';
+} from '../semverUtil';
 
 interface PnpmAuditAdvisory {
   module_name?: string;

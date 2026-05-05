@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { refreshDeps } from '../src/refresh.js';
-import { silentLogger } from '../src/logger.js';
-import { makeRecordingRunner } from './helpers/recordingRunner.js';
+import { refreshDeps } from '../src/refresh';
+import { silentLogger } from '../src/logger';
+import { makeRecordingRunner } from './helpers/recordingRunner';
 
 let tmp: string;
 

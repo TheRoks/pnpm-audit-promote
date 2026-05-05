@@ -1,6 +1,6 @@
 import semver from 'semver';
-import type { Logger } from '../logger.js';
-import { getCatalogVersions } from '../catalog.js';
+import type { Logger } from '../logger';
+import { getCatalogVersions } from '../catalog';
 
 /**
  * Returns ` (MAJOR)` when `next` crosses a major boundary above `prior`,

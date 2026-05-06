@@ -1,5 +1,12 @@
 # pnpm-audit-promote
 
+## [1.4.1](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.4.0...v1.4.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* **audit:** implement qualified override collapsing in workspace promotion ([#24](https://github.com/TheRoks/pnpm-audit-promote/issues/24)) ([6670958](https://github.com/TheRoks/pnpm-audit-promote/commit/6670958731212715b11a78c8d02498a02c4acbe0))
+
 ## [1.4.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.3.0...v1.4.0) (2026-05-05)
 
 

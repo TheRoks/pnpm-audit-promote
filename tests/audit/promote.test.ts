@@ -194,6 +194,49 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     expect(out).toContain('vite@<=6.4.1');
     expect(out).toContain("vite: '6.4.2'"); // catalog unchanged
   });
+
+  it('collapses subset workspace overrides into the broader selector with the strongest fix', () => {
+    // axios is not in the catalog, so both qualified overrides survive promotion.
+    // The narrower selector should be subsumed by the broader one and the fix
+    // floor lifted to the stronger of the two.
+    const yaml =
+      "catalog:\n  react: '18.2.0'\n\noverrides:\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'axios@>=1.0.0 <1.15.2': '>=1.15.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain('axios@>=1.0.0 <1.15.2');
+    expect(out).toContain("'>=1.15.2'");
+    expect(out).not.toContain('<1.15.1');
+  });
+
+  it('collapses equivalent workspace override selectors keeping the first occurrence', () => {
+    // Whitespace-only variants describe the same range; keep the first.
+    const yaml =
+      "catalog: {}\n\noverrides:\n  'foo@>=1.0.0 <2.0.0': '>=1.5.0'\n  'foo@>=1.0.0  <2.0.0': '>=1.7.0'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("'foo@>=1.0.0 <2.0.0': '>=1.7.0'");
+    expect(out).not.toContain('foo@>=1.0.0  <2.0.0');
+  });
+
+  it('does not merge workspace overrides for different bare packages', () => {
+    const yaml =
+      "catalog: {}\n\noverrides:\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'lodash@>=4.0.0 <4.18.0': '>=4.18.0'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain('axios@>=1.0.0 <1.15.1');
+    expect(out).toContain('lodash@>=4.0.0 <4.18.0');
+  });
+
+  it('collapses qualified workspace overrides while still promoting unrelated catalog entries', () => {
+    const yaml =
+      "catalog:\n  react: '18.2.0'\n\noverrides:\n  react: '18.3.1'\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'axios@>=1.0.0 <1.15.2': '>=1.15.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("react: '18.3.1'"); // promoted
+    expect(out).toContain('axios@>=1.0.0 <1.15.2');
+    expect(out).toContain("'>=1.15.2'");
+    expect(out).not.toContain('<1.15.1');
+  });
 });
 
 describe('cross-major warning', () => {

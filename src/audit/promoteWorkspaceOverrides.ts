@@ -3,8 +3,14 @@ import { isMap, isScalar, type Pair } from 'yaml';
 import type { Logger } from '../logger';
 import type { WorkspaceState } from '../workspace';
 import { applyCatalogUpdatesToDoc, parseWorkspaceDoc, readCatalog, serializeDoc } from '../catalog';
-import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil';
+import {
+  compareSemVer,
+  getBarePackageName,
+  isPlainPackageName,
+  normalizeRange,
+} from '../semverUtil';
 import { reportPromotions } from './bumpReporting';
+import { collapseQualifiedOverrideEntries, type QualifiedOverrideEntry } from './overrideCollapse';
 
 /**
  * Promote direct-dependency audit fixes from the workspace yaml `overrides:`
@@ -76,24 +82,79 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
     keepItems.push(item);
   }
 
-  if (updates.size === 0) return current;
-
-  reportPromotions(
-    current,
-    updates,
-    'Promoting direct-dependency audit fixes into the catalog:',
+  // Even when no catalog promotions happen, collapse subsumed qualified
+  // overrides so duplicate / subset selectors don't accumulate over time.
+  const { items: collapsedItems, changed: collapsedChanged } = collapseQualifiedYamlOverrides(
+    keepItems,
     logger,
   );
 
-  applyCatalogUpdatesToDoc(doc, updates);
+  if (updates.size === 0 && !collapsedChanged) return current;
 
-  if (keepItems.length === 0) {
+  if (updates.size > 0) {
+    reportPromotions(
+      current,
+      updates,
+      'Promoting direct-dependency audit fixes into the catalog:',
+      logger,
+    );
+
+    applyCatalogUpdatesToDoc(doc, updates);
+  }
+
+  if (collapsedItems.length === 0) {
     doc.delete('overrides');
-  } else if (keepItems.length !== overridesNode.items.length) {
-    overridesNode.items = keepItems as typeof overridesNode.items;
+  } else {
+    overridesNode.items = collapsedItems as typeof overridesNode.items;
   }
 
   const newYaml = serializeDoc(doc, current);
   state.saveWorkspaceYaml(newYaml);
   return newYaml;
+}
+
+/**
+ * Run the generic qualified-override collapse algorithm over kept YAML
+ * `overrides:` pairs, mutating values where merged and dropping subsumed
+ * pairs. Returns the (possibly trimmed) item list and a `changed` flag
+ * indicating whether any pair was dropped or had its value rewritten.
+ */
+function collapseQualifiedYamlOverrides(
+  items: Pair[],
+  logger: Logger,
+): { items: Pair[]; changed: boolean } {
+  if (items.length < 2) return { items, changed: false };
+
+  const entries: QualifiedOverrideEntry<number>[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item) continue;
+    const key = isScalar(item.key) ? String(item.key.value) : null;
+    const val = isScalar(item.value) ? String(item.value.value) : null;
+    if (key === null || val === null) continue;
+    if (isPlainPackageName(key)) continue;
+
+    const bare = getBarePackageName(key);
+    const keyRange = key.slice(bare.length + 1);
+    const normalized = normalizeRange(keyRange);
+    if (!normalized) continue;
+    entries.push({ id: i, bare, range: normalized, val });
+  }
+
+  const { drop, updates } = collapseQualifiedOverrideEntries(entries);
+  if (drop.size === 0 && updates.size === 0) return { items, changed: false };
+
+  const out: Pair[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (drop.has(i)) continue;
+    const item = items[i];
+    if (!item) continue;
+    const updated = updates.get(i);
+    if (updated !== undefined && isScalar(item.value)) {
+      item.value.value = updated;
+    }
+    out.push(item);
+  }
+  logger.detail('Collapsed redundant qualified workspace overrides for clarity.');
+  return { items: out, changed: true };
 }

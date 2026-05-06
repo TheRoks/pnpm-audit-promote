@@ -23,69 +23,67 @@ export function strongestFixRange(a: string, b: string): string | null {
 const ENTRY_RE = /^([ \t]*)"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(,?)\s*$/;
 
 /**
- * Detect qualified overrides for the same bare package whose selector ranges
- * are subsets of one another, and collapse them into the broader selector
- * carrying the strongest fix range. Reduces noise in `pnpm.overrides` after
- * `pnpm audit --fix` adds multiple narrow ranges that could all be satisfied
- * by a single broader rule.
+ * A single qualified override entry feeding the generic collapse algorithm.
+ * `id` is opaque to the algorithm and is echoed back via `drop`/`updates`
+ * so callers can map decisions onto their own substrate (line indices,
+ * YAML AST positions, etc).
  */
-export function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly string[]): string[] {
-  type Candidate = {
-    idx: number;
-    bare: string;
-    range: string;
-    keyRange: string;
-    val: string;
-    originalVal: string;
-    indent: string;
-  };
-  const candidates: Candidate[] = [];
+export interface QualifiedOverrideEntry<TId> {
+  id: TId;
+  /** Bare package name (e.g. `axios`, `@scope/pkg`). */
+  bare: string;
+  /** Normalized SemVer range derived from the qualifier portion of the key. */
+  range: string;
+  /** Current fix value (e.g. `>=1.15.1`). */
+  val: string;
+}
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const m = ENTRY_RE.exec(line);
-    if (!m) continue;
-    const indent = m[1] ?? '';
-    const key = m[2] ?? '';
-    const val = m[3] ?? '';
-    if (isPlainPackageName(key)) continue;
+/**
+ * Decisions produced by the generic collapse algorithm.
+ *
+ * - `drop`: ids of entries that should be removed (subsumed by another).
+ * - `updates`: ids whose `val` should be replaced with the merged stronger
+ *   fix range. Only present when the merged value differs from the original.
+ */
+export interface CollapseDecisions<TId> {
+  drop: Set<TId>;
+  updates: Map<TId, string>;
+}
 
-    const bare = getBarePackageName(key);
-    const keyRange = key.slice(bare.length + 1);
-    const normalized = normalizeRange(keyRange);
-    if (!normalized) continue;
-    candidates.push({
-      idx: i,
-      bare,
-      range: normalized,
-      keyRange,
-      val,
-      originalVal: val,
-      indent,
-    });
-  }
+/**
+ * Generic collapse core: for every pair of entries that share a bare
+ * package name and whose ranges are subsets of one another, drop the
+ * narrower entry (or the duplicate) and lift the stronger fix range onto
+ * the surviving broader entry.
+ *
+ * Substrate-agnostic — works on JSON-line entries, YAML AST pairs, or any
+ * other source as long as the caller produces normalized `bare`/`range`
+ * tuples.
+ */
+export function collapseQualifiedOverrideEntries<TId>(
+  entries: readonly QualifiedOverrideEntry<TId>[],
+): CollapseDecisions<TId> {
+  const drop = new Set<TId>();
+  const updates = new Map<TId, string>();
+  if (entries.length < 2) return { drop, updates };
 
-  if (candidates.length < 2) return [...lines];
+  // Working copies so the iteration can update values mid-pass.
+  const working = entries.map((e) => ({ ...e, originalVal: e.val }));
 
-  const drop = new Set<number>();
-  const byIndex = new Map<number, Candidate>();
-  for (const c of candidates) byIndex.set(c.idx, c);
-
-  const groups = new Map<string, Candidate[]>();
-  for (const c of candidates) {
-    const k = c.bare;
-    const arr = groups.get(k);
-    if (arr) arr.push(c);
-    else groups.set(k, [c]);
+  const groups = new Map<string, typeof working>();
+  for (const e of working) {
+    const arr = groups.get(e.bare);
+    if (arr) arr.push(e);
+    else groups.set(e.bare, [e]);
   }
 
   for (const group of groups.values()) {
     for (let i = 0; i < group.length; i++) {
       const a = group[i];
-      if (!a || drop.has(a.idx)) continue;
+      if (!a || drop.has(a.id)) continue;
       for (let j = i + 1; j < group.length; j++) {
         const b = group[j];
-        if (!b || drop.has(b.idx)) continue;
+        if (!b || drop.has(b.id)) continue;
         let aInB: boolean;
         let bInA: boolean;
         try {
@@ -99,7 +97,7 @@ export function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly s
           if (!merged) continue;
           a.val = merged;
           // Equivalent selectors; keep first occurrence for stable output.
-          drop.add(b.idx);
+          drop.add(b.id);
           continue;
         }
         if (aInB) {
@@ -107,7 +105,7 @@ export function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly s
           if (!merged) continue;
           b.val = merged;
           // a is narrower than b; drop a and keep broader b with strongest fix.
-          drop.add(a.idx);
+          drop.add(a.id);
           break;
         }
         if (bInA) {
@@ -115,26 +113,63 @@ export function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly s
           if (!merged) continue;
           a.val = merged;
           // b is narrower than a; drop b and keep broader a with strongest fix.
-          drop.add(b.idx);
+          drop.add(b.id);
         }
       }
     }
   }
 
-  const changedValues = new Set<number>();
-  for (const c of candidates) {
-    if (c.val !== c.originalVal) changedValues.add(c.idx);
+  for (const e of working) {
+    if (!drop.has(e.id) && e.val !== e.originalVal) {
+      updates.set(e.id, e.val);
+    }
+  }
+  return { drop, updates };
+}
+
+/**
+ * Detect qualified overrides for the same bare package whose selector ranges
+ * are subsets of one another, and collapse them into the broader selector
+ * carrying the strongest fix range. Reduces noise in `pnpm.overrides` after
+ * `pnpm audit --fix` adds multiple narrow ranges that could all be satisfied
+ * by a single broader rule.
+ */
+export function collapseRedundantQualifiedPackageJsonOverrides(lines: readonly string[]): string[] {
+  type Meta = { indent: string; key: string; trailingComma: string };
+  const meta = new Map<number, Meta>();
+  const entries: QualifiedOverrideEntry<number>[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const m = ENTRY_RE.exec(line);
+    if (!m) continue;
+    const indent = m[1] ?? '';
+    const key = m[2] ?? '';
+    const val = m[3] ?? '';
+    const trailingComma = m[4] ?? '';
+    if (isPlainPackageName(key)) continue;
+
+    const bare = getBarePackageName(key);
+    const keyRange = key.slice(bare.length + 1);
+    const normalized = normalizeRange(keyRange);
+    if (!normalized) continue;
+    meta.set(i, { indent, key, trailingComma });
+    entries.push({ id: i, bare, range: normalized, val });
   }
 
-  if (drop.size === 0 && changedValues.size === 0) return [...lines];
+  const { drop, updates } = collapseQualifiedOverrideEntries(entries);
+  if (drop.size === 0 && updates.size === 0) return [...lines];
 
   const out: string[] = [];
   for (let idx = 0; idx < lines.length; idx++) {
     if (drop.has(idx)) continue;
-    const candidate = byIndex.get(idx);
-    if (candidate && changedValues.has(idx)) {
-      const rewritten = `${candidate.indent}"${candidate.bare}@${candidate.keyRange}": "${candidate.val}",`;
-      out.push(rewritten);
+    const updated = updates.get(idx);
+    const m = meta.get(idx);
+    if (updated !== undefined && m) {
+      // Preserve the trailing comma if the original had one; otherwise add
+      // one (the post-collapse cleanup pass strips a dangling comma at end).
+      const comma = m.trailingComma || ',';
+      out.push(`${m.indent}"${m.key}": "${updated}"${comma}`);
       continue;
     }
     out.push(lines[idx] ?? '');

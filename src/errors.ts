@@ -5,10 +5,18 @@
  * existing log output is unchanged.
  */
 
-/** Thrown when no `pnpm-workspace.yaml` is found at the configured path. */
+/**
+ * Thrown when the configured path is not a recognizable pnpm workspace root.
+ *
+ * A directory qualifies as a workspace root when it contains either:
+ *   - `pnpm-workspace.yaml`, or
+ *   - `package.json` whose `packageManager` field starts with `pnpm@`.
+ */
 export class WorkspaceNotFoundError extends Error {
-  constructor(public readonly workspaceYamlPath: string) {
-    super(`pnpm-workspace.yaml not found at '${workspaceYamlPath}'. Pass --path <workspace root>.`);
+  constructor(public readonly workspaceRoot: string) {
+    super(
+      `No pnpm workspace found at '${workspaceRoot}'. Expected pnpm-workspace.yaml or package.json with "packageManager": "pnpm@...". Pass --path <workspace root>.`,
+    );
     this.name = 'WorkspaceNotFoundError';
   }
 }

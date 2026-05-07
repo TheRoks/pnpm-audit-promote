@@ -73,6 +73,46 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(installs).toHaveLength(1);
   });
 
+  it('runs without a pnpm-workspace.yaml when package.json declares pnpm', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'root',
+          private: true,
+          packageManager: 'pnpm@10.0.0',
+          pnpm: { overrides: { react: '18.3.1' } },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8');
+
+    const { runner, calls } = makeRecordingRunner();
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'pnpm-lock.yaml'))).toBe(false);
+    const installs = calls.filter((c) => c.args[0] === 'install');
+    expect(installs).toHaveLength(1);
+    // pnpm.overrides should still be stripped from root package.json
+    const pj = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: unknown;
+    };
+    expect(pj.pnpm).toBeUndefined();
+  });
+
   it('dry-run does not delete the lockfile or invoke pnpm', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),

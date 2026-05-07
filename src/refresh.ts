@@ -218,6 +218,9 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
     });
 
   logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
+  if (!state.hasWorkspaceYaml) {
+    logger.info('No pnpm-workspace.yaml detected — catalog promotion steps will be skipped.');
+  }
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }

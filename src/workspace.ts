@@ -14,6 +14,13 @@ export class WorkspaceState {
   readonly lockFile: string;
   readonly workspaceYaml: string;
   readonly rootPackageJson: string;
+  /**
+   * True when `pnpm-workspace.yaml` exists at the workspace root. When false,
+   * the workspace was identified solely via `package.json` `packageManager`,
+   * and all catalog/workspace-yaml manipulation steps degrade to no-ops
+   * (catalogs are a workspace-yaml-only feature in pnpm 10+).
+   */
+  hasWorkspaceYaml = false;
 
   /**
    * Snapshot of the *desired* pnpm-workspace.yaml content. Re-applied after
@@ -39,14 +46,18 @@ export class WorkspaceState {
   static initialize(workspacePath: string, options: { dryRun?: boolean } = {}): WorkspaceState {
     const root = path.resolve(workspacePath);
     const ws = new WorkspaceState(root);
-    if (!fs.existsSync(ws.workspaceYaml)) {
-      throw new WorkspaceNotFoundError(ws.workspaceYaml);
+    const yamlExists = fs.existsSync(ws.workspaceYaml);
+    if (!yamlExists && !hasPnpmPackageManager(ws.rootPackageJson)) {
+      throw new WorkspaceNotFoundError(root);
     }
+    ws.hasWorkspaceYaml = yamlExists;
     ws.dryRun = options.dryRun ?? false;
-    ws.detectEol();
-    // Initialize the desired snapshot from the current file so that
-    // `restoreWorkspaceYaml` is safe before any cleanup step has run.
-    ws.desiredWorkspaceYaml = ws.readWorkspaceYaml();
+    if (yamlExists) {
+      ws.detectEol();
+      // Initialize the desired snapshot from the current file so that
+      // `restoreWorkspaceYaml` is safe before any cleanup step has run.
+      ws.desiredWorkspaceYaml = ws.readWorkspaceYaml();
+    }
     return ws;
   }
 
@@ -60,11 +71,13 @@ export class WorkspaceState {
   }
 
   readWorkspaceYaml(): string {
+    if (!this.hasWorkspaceYaml) return '';
     return fs.readFileSync(this.workspaceYaml, 'utf8');
   }
 
   saveWorkspaceYaml(content: string): void {
     if (this.dryRun) return;
+    if (!this.hasWorkspaceYaml) return;
     fs.writeFileSync(this.workspaceYaml, content, 'utf8');
   }
 
@@ -73,6 +86,7 @@ export class WorkspaceState {
    * restore the desired content. Returns true when a restore happened.
    */
   restoreWorkspaceYaml(logger: Logger): boolean {
+    if (!this.hasWorkspaceYaml) return false;
     if (!this.desiredWorkspaceYaml) return false;
     const current = this.readWorkspaceYaml();
     if (current !== this.desiredWorkspaceYaml) {
@@ -80,6 +94,22 @@ export class WorkspaceState {
       this.saveWorkspaceYaml(this.desiredWorkspaceYaml);
       return true;
     }
+    return false;
+  }
+}
+
+/**
+ * Returns true when `pkgJsonPath` exists and its `packageManager` field
+ * declares pnpm (e.g. `"pnpm@10.0.0"`). Returns false on any read/parse
+ * failure so callers can treat it as a soft check.
+ */
+function hasPnpmPackageManager(pkgJsonPath: string): boolean {
+  try {
+    const text = fs.readFileSync(pkgJsonPath, 'utf8');
+    const parsed = JSON.parse(text) as { packageManager?: unknown };
+    const pm = parsed.packageManager;
+    return typeof pm === 'string' && /^pnpm@/i.test(pm.trim());
+  } catch {
     return false;
   }
 }

@@ -19,6 +19,7 @@ import { collapseQualifiedOverrideEntries, type QualifiedOverrideEntry } from '.
  * Returns the new desired workspace yaml content.
  */
 export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Logger): string {
+  if (!state.hasWorkspaceYaml) return '';
   const current = state.readWorkspaceYaml();
   const doc = parseWorkspaceDoc(current);
   if (!doc) return current;

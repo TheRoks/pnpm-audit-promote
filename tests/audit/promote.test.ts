@@ -50,6 +50,18 @@ describe('syncAuditOverridesIntoCatalog', () => {
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
     expect(out).toBe(yaml);
   });
+
+  it('returns empty and writes nothing when pnpm-workspace.yaml is absent', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const state = WorkspaceState.initialize(tmp);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toBe('');
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
+  });
 });
 
 describe('syncPackageJsonOverridesIntoCatalog', () => {

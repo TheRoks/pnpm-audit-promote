@@ -30,7 +30,11 @@ program
     'Refresh pnpm dependencies, run audit --fix, and promote catalog-eligible overrides back into the pnpm catalog.',
   )
   .version(PKG_VERSION)
-  .option('-p, --path <dir>', 'Workspace root containing pnpm-workspace.yaml', process.cwd())
+  .option(
+    '-p, --path <dir>',
+    'Workspace root containing pnpm-workspace.yaml or a package.json with packageManager set to pnpm',
+    process.cwd(),
+  )
   .option('-f, --force', 'Skip the confirmation prompt before destructive deletes', false)
   .option('-y, --yes', 'Alias for --force')
   .option('-n, --dry-run', 'Plan and log changes without writing files or invoking pnpm', false)

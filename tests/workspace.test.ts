@@ -17,8 +17,37 @@ afterEach(() => {
 });
 
 describe('WorkspaceState', () => {
-  it('throws when pnpm-workspace.yaml is missing', () => {
-    expect(() => WorkspaceState.initialize(tmp)).toThrow(/pnpm-workspace.yaml not found/);
+  it('throws when neither pnpm-workspace.yaml nor a pnpm packageManager is present', () => {
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
+  });
+
+  it('throws when package.json exists but does not declare pnpm', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', packageManager: 'yarn@4.0.0' }),
+      'utf8',
+    );
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
+  });
+
+  it('initializes from package.json with pnpm packageManager when yaml is missing', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+    expect(ws.desiredWorkspaceYaml).toBe('');
+    expect(ws.readWorkspaceYaml()).toBe('');
+    ws.saveWorkspaceYaml('catalog:\n  react: "1.0.0"\n');
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
+    expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
+  });
+
+  it('tolerates malformed package.json when checking packageManager', () => {
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ not json', 'utf8');
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
   });
 
   it('initializes and detects CRLF line endings', () => {

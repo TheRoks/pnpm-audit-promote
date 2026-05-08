@@ -17,8 +17,88 @@ afterEach(() => {
 });
 
 describe('WorkspaceState', () => {
-  it('throws when pnpm-workspace.yaml is missing', () => {
-    expect(() => WorkspaceState.initialize(tmp)).toThrow(/pnpm-workspace.yaml not found/);
+  it('throws when neither pnpm-workspace.yaml nor a pnpm packageManager is present', () => {
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
+  });
+
+  it('throws when package.json exists but does not declare pnpm', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', packageManager: 'yarn@4.0.0' }),
+      'utf8',
+    );
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
+  });
+
+  it('initializes from package.json with pnpm packageManager when yaml is missing', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+    expect(ws.desiredWorkspaceYaml).toBe('');
+    expect(ws.readWorkspaceYaml()).toBe('');
+    ws.saveWorkspaceYaml('catalog:\n  react: "1.0.0"\n');
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
+    expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
+  });
+
+  it('initializes from package.json with a pnpm config object when yaml is missing', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', pnpm: { overrides: {} } }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+  });
+
+  it('initializes when a sibling pnpm-lock.yaml is present', () => {
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
+    fs.writeFileSync(path.join(tmp, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8');
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+  });
+
+  it('throws EnclosingWorkspaceError when a parent has pnpm-workspace.yaml', () => {
+    const sub = path.join(tmp, 'examples', 'angular');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "packages:\n  - 'examples/*'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(sub, 'package.json'),
+      JSON.stringify({ name: 'x', pnpm: { overrides: {} } }),
+      'utf8',
+    );
+    expect(() => WorkspaceState.initialize(sub)).toThrow(/enclosing pnpm workspace/i);
+  });
+
+  it('honors ignoreParentWorkspace and proceeds despite an enclosing yaml', () => {
+    const sub = path.join(tmp, 'examples', 'angular');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "packages:\n  - 'examples/*'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(sub, 'package.json'),
+      JSON.stringify({ name: 'x', pnpm: { overrides: {} } }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(sub, { ignoreParentWorkspace: true });
+    expect(ws.workspaceRoot).toBe(path.resolve(sub));
+    expect(ws.hasWorkspaceYaml).toBe(false);
+  });
+
+  it('tolerates malformed package.json when checking packageManager', () => {
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ not json', 'utf8');
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
   });
 
   it('initializes and detects CRLF line endings', () => {

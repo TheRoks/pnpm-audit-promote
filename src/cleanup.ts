@@ -99,6 +99,11 @@ export async function removeNodeModulesFolders(
 export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Logger): void {
   logger.step("Remove workspace 'overrides:' block");
 
+  if (!state.hasWorkspaceYaml) {
+    logger.detail('No pnpm-workspace.yaml — skipping workspace overrides cleanup.');
+    return;
+  }
+
   const original = state.readWorkspaceYaml();
   // Match the overrides block and any blank line that immediately follows it,
   // so removal does not leave a stray blank line behind.

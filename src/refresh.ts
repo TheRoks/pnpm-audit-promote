@@ -77,6 +77,14 @@ export interface RefreshOptions {
   summary?: boolean;
   /** Optional path to also write the plain-text summary to. */
   summaryFile?: string;
+  /**
+   * When true, treat `path` as the workspace root even if an enclosing
+   * `pnpm-workspace.yaml` exists in a parent directory, and forward
+   * `--ignore-workspace` to every pnpm invocation so pnpm does not walk up
+   * to that parent. Without this flag, an enclosing workspace causes
+   * `EnclosingWorkspaceError` to be thrown.
+   */
+  ignoreWorkspace?: boolean;
 }
 
 /**
@@ -207,7 +215,11 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   if (!options.pnpm && !dryRun) {
     await ensurePnpmAvailable();
   }
-  const state = WorkspaceState.initialize(options.path, { dryRun });
+  const ignoreWorkspace = options.ignoreWorkspace ?? false;
+  const state = WorkspaceState.initialize(options.path, {
+    dryRun,
+    ignoreParentWorkspace: ignoreWorkspace,
+  });
   const pnpm =
     options.pnpm ??
     createPnpmRunner({
@@ -215,9 +227,16 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
       logger,
       inheritOutput: logger.isVerbose(),
       dryRun,
+      extraArgs: ignoreWorkspace ? ['--ignore-workspace'] : [],
     });
 
   logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
+  if (ignoreWorkspace) {
+    logger.info('Ignoring any enclosing pnpm workspace (--ignore-workspace).');
+  }
+  if (!state.hasWorkspaceYaml) {
+    logger.info('No pnpm-workspace.yaml detected — catalog promotion steps will be skipped.');
+  }
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }

@@ -5,11 +5,48 @@
  * existing log output is unchanged.
  */
 
-/** Thrown when no `pnpm-workspace.yaml` is found at the configured path. */
+/**
+ * Thrown when the configured path is not a recognizable pnpm workspace root.
+ *
+ * A directory qualifies as a workspace root when it contains either:
+ *   - `pnpm-workspace.yaml`, or
+ *   - `pnpm-lock.yaml`, or
+ *   - `package.json` whose `packageManager` field starts with `pnpm@`, or
+ *   - `package.json` with a `pnpm` config object (e.g. `pnpm.overrides`).
+ */
 export class WorkspaceNotFoundError extends Error {
-  constructor(public readonly workspaceYamlPath: string) {
-    super(`pnpm-workspace.yaml not found at '${workspaceYamlPath}'. Pass --path <workspace root>.`);
+  constructor(public readonly workspaceRoot: string) {
+    super(
+      `No pnpm workspace found at '${workspaceRoot}'. Expected pnpm-workspace.yaml, pnpm-lock.yaml, or package.json with "packageManager": "pnpm@..." or a "pnpm" config field. Pass --path <workspace root>.`,
+    );
     this.name = 'WorkspaceNotFoundError';
+  }
+}
+
+/**
+ * Thrown when the requested path sits inside another pnpm workspace
+ * (i.e. an enclosing directory contains `pnpm-workspace.yaml`). Without
+ * this guard, `pnpm install` walks upward and mutates the parent
+ * workspace's lockfile and `pnpm-workspace.yaml` instead of the directory
+ * the user asked us to operate on.
+ *
+ * Resolve by either:
+ *   - re-running with `--path <enclosingWorkspaceRoot>` to operate on the
+ *     parent workspace explicitly, or
+ *   - re-running with `--ignore-workspace` to keep operations local
+ *     (forwarded to every pnpm invocation).
+ */
+export class EnclosingWorkspaceError extends Error {
+  constructor(
+    public readonly requestedPath: string,
+    public readonly enclosingWorkspaceRoot: string,
+  ) {
+    super(
+      `Refusing to operate on '${requestedPath}': an enclosing pnpm workspace was found at '${enclosingWorkspaceRoot}'. ` +
+        `pnpm install would mutate that parent workspace's pnpm-workspace.yaml and pnpm-lock.yaml. ` +
+        `Re-run with --path '${enclosingWorkspaceRoot}' to operate on the parent, or pass --ignore-workspace to keep all operations local to '${requestedPath}'.`,
+    );
+    this.name = 'EnclosingWorkspaceError';
   }
 }
 

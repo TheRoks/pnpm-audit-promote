@@ -124,6 +124,39 @@ describe('createPnpmRunner output gating', () => {
     expect(trace).toHaveBeenCalledWith('(dry-run) pnpm dedupe');
   });
 
+  it('appends extraArgs to every spawned pnpm invocation', async () => {
+    mockExit(0);
+    const runner = createPnpmRunner({
+      cwd: '/tmp/workspace',
+      logger: makeLogger(),
+      extraArgs: ['--ignore-workspace'],
+    });
+
+    await runner.run(['install']);
+    await runner.runAllowFail(['dedupe']);
+    spawnMock.mockImplementationOnce(() => makeChildWithStdout(0, ''));
+    await runner.capture(['audit', '--json']);
+
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      'pnpm',
+      ['install', '--ignore-workspace'],
+      expect.any(Object),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      'pnpm',
+      ['dedupe', '--ignore-workspace'],
+      expect.any(Object),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      3,
+      'pnpm',
+      ['audit', '--json', '--ignore-workspace'],
+      expect.any(Object),
+    );
+  });
+
   it('emits heartbeat progress messages when output is hidden', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,

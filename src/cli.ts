@@ -20,6 +20,7 @@ interface CliOptions {
   summaryFile?: string;
   verbose: boolean;
   quiet: boolean;
+  ignoreWorkspace: boolean;
 }
 
 const program = new Command();
@@ -30,7 +31,11 @@ program
     'Refresh pnpm dependencies, run audit --fix, and promote catalog-eligible overrides back into the pnpm catalog.',
   )
   .version(PKG_VERSION)
-  .option('-p, --path <dir>', 'Workspace root containing pnpm-workspace.yaml', process.cwd())
+  .option(
+    '-p, --path <dir>',
+    'Workspace root containing pnpm-workspace.yaml or a package.json with packageManager set to pnpm',
+    process.cwd(),
+  )
   .option('-f, --force', 'Skip the confirmation prompt before destructive deletes', false)
   .option('-y, --yes', 'Alias for --force')
   .option('-n, --dry-run', 'Plan and log changes without writing files or invoking pnpm', false)
@@ -49,6 +54,11 @@ program
     false,
   )
   .option('-q, --quiet', 'Quiet output (warnings + errors only)', false)
+  .option(
+    '--ignore-workspace',
+    'Treat --path as the workspace root even when an enclosing pnpm-workspace.yaml exists in a parent. Forwards --ignore-workspace to every pnpm invocation so installs/overrides stay local.',
+    false,
+  )
   .action(async (opts: CliOptions) => {
     const level: LogLevel = opts.quiet ? 'quiet' : opts.verbose ? 'verbose' : 'normal';
     const logger = createLogger({ level });
@@ -62,6 +72,7 @@ program
         allowMajor: opts.allowMajor,
         summary: opts.summary,
         summaryFile: opts.summaryFile,
+        ignoreWorkspace: opts.ignoreWorkspace,
         logger,
       });
     } catch (e) {

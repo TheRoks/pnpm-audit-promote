@@ -129,6 +129,23 @@ describe('cleanup helpers', () => {
     expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(true);
   });
 
+  it('skips workspace overrides cleanup when no pnpm-workspace.yaml is present', () => {
+    fs.rmSync(path.join(tmp, 'pnpm-workspace.yaml'), { force: true });
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const state = WorkspaceState.initialize(tmp);
+    const lines: string[] = [];
+    const logger = createLogger({ out: (l) => lines.push(l), color: false });
+
+    removeWorkspaceOverridesBlock(state, logger);
+
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
+    expect(lines.some((l) => /skipping workspace overrides cleanup/.test(l))).toBe(true);
+  });
+
   it('removes pnpm.overrides from package.json and skips invalid post-edit JSON', () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web'), { recursive: true });

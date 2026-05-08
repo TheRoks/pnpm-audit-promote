@@ -9,6 +9,7 @@ export type {
 export { renderTerminalSummary, type RenderOptions } from './summary/render';
 export type { ConfirmContext, ConfirmFn } from './prompt';
 export {
+  EnclosingWorkspaceError,
   NonInteractiveConfirmationError,
   PnpmCommandFailedError,
   PnpmNotInstalledError,

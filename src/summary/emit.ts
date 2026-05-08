@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { Logger } from '../logger';
 import type { PnpmRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
@@ -85,11 +86,50 @@ export function renderRunSummary(summary: RunSummaryData, args: RenderRunSummary
 
   if (summaryFile && !dryRun) {
     try {
+      const outputPath = resolveSummaryOutputPath(summary.workspaceRoot, summaryFile);
       const plain = renderTerminalSummary(summary, { color: false });
-      fs.writeFileSync(summaryFile, plain + '\n', 'utf8');
-      logger.detail(`Wrote run summary to ${summaryFile}.`);
+      fs.writeFileSync(outputPath, plain + '\n', 'utf8');
+      logger.detail(`Wrote run summary to ${outputPath}.`);
     } catch (e) {
       logger.warn(`Could not write summary to ${summaryFile}: ${(e as Error).message}.`);
     }
   }
+}
+
+function resolveSummaryOutputPath(workspaceRoot: string, summaryFile: string): string {
+  const targetPath = path.resolve(summaryFile);
+  const rootPath = path.resolve(workspaceRoot);
+
+  if (!isWithinRoot(rootPath, targetPath)) {
+    throw new Error(`output path is outside workspace root '${rootPath}'`);
+  }
+
+  if (fs.existsSync(targetPath)) {
+    const stat = fs.statSync(targetPath);
+    if (stat.isDirectory()) {
+      throw new Error('output path points to a directory');
+    }
+    const realTargetPath = fs.realpathSync(targetPath);
+    const realRoot = fs.realpathSync(rootPath);
+    if (!isWithinRoot(realRoot, realTargetPath)) {
+      throw new Error(`output path resolves outside workspace root '${rootPath}'`);
+    }
+  }
+
+  const targetDir = path.dirname(targetPath);
+  if (fs.existsSync(targetDir)) {
+    const realTargetDir = fs.realpathSync(targetDir);
+    const realRoot = fs.realpathSync(rootPath);
+    if (!isWithinRoot(realRoot, realTargetDir) && realTargetDir !== realRoot) {
+      throw new Error(`output path resolves outside workspace root '${rootPath}'`);
+    }
+  }
+
+  return targetPath;
+}
+
+function isWithinRoot(rootPath: string, targetPath: string): boolean {
+  const rel = path.relative(rootPath, targetPath);
+  if (rel === '') return true;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
 }

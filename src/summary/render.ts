@@ -214,18 +214,33 @@ function renderAdvisoryRows(
   out: string[],
   c: ColorFns,
 ): void {
-  const sevW = Math.max(...advisories.map((a) => severityLabel(a.severity).length));
-  const modW = Math.max(...advisories.map((a) => a.module.length));
-  const cveW = Math.max(...advisories.map((a) => (a.cves[0] ? a.cves[0].length : '—'.length)));
-  for (const a of advisories) {
+  const rows = advisories.map((a) => ({
+    severity: a.severity,
+    module: sanitizeDisplayText(a.module),
+    cve: sanitizeDisplayText(a.cves[0] ?? '—'),
+    cveCount: a.cves.length,
+    title: sanitizeDisplayText(a.title),
+  }));
+
+  const sevW = Math.max(...rows.map((a) => severityLabel(a.severity).length));
+  const modW = Math.max(...rows.map((a) => a.module.length));
+  const cveW = Math.max(...rows.map((a) => a.cve.length));
+  for (const a of rows) {
     const sev = severityColor(a.severity, c)(padEnd(severityLabel(a.severity), sevW));
-    const cveStr = a.cves[0] ?? '—';
-    const cveExtra = a.cves.length > 1 ? c.dim(` (+${a.cves.length - 1})`) : '';
+    const cveExtra = a.cveCount > 1 ? c.dim(` (+${a.cveCount - 1})`) : '';
     const title = a.title || c.dim('—');
     out.push(
-      `    ${sev}  ${padEnd(a.module, modW)}  ${c.dim(padEnd(cveStr, cveW))}${cveExtra}  ${title}`,
+      `    ${sev}  ${padEnd(a.module, modW)}  ${c.dim(padEnd(a.cve, cveW))}${cveExtra}  ${title}`,
     );
   }
+}
+
+function sanitizeDisplayText(text: string): string {
+  return text
+    .replace(ANSI_ESCAPE_RE, '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(CONTROL_RE, '')
+    .trim();
 }
 
 function pluralize(n: number, singular: string, plural?: string): string {
@@ -273,6 +288,12 @@ interface ColorFns {
   blue: (s: string) => string;
   gray: (s: string) => string;
 }
+
+/* eslint-disable no-control-regex */
+const ANSI_ESCAPE_RE =
+  /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)|P[\s\S]*?\u001B\\|\^[\s\S]*?\u001B\\|_[\s\S]*?\u001B\\)/g;
+const CONTROL_RE = /[\u0000-\u0008\u000B-\u001A\u001C-\u001F\u007F-\u009F]/g;
+/* eslint-enable no-control-regex */
 
 const identity = (s: string): string => s;
 const NO_COLOR: ColorFns = {

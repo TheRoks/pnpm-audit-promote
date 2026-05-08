@@ -72,7 +72,7 @@ pnpm-audit-promote [options]
 | `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                                                                                                                                   |         |
 | `--allow-major`             | Allow catalog bumps that cross a major version boundary (still logged as warnings). Use `--no-allow-major` to refuse them and keep the bump as an override.                                                | `true`  |
 | `--no-summary`              | Suppress the terminal-pretty run summary printed at the end                                                                                                                                                |         |
-| `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path                                                                                                                                |         |
+| `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path. Path must be within the workspace root; outside paths are silently skipped.                                                   |         |
 | `--ignore-workspace`        | Treat `--path` as the workspace root even when an enclosing `pnpm-workspace.yaml` is found in a parent directory. Forwards `--ignore-workspace` to every pnpm invocation so installs/overrides stay local. | `false` |
 | `-v, --verbose`             | Verbose output (raw pnpm output + tracing)                                                                                                                                                                 | `false` |
 | `-q, --quiet`               | Quiet output (warnings + errors only)                                                                                                                                                                      | `false` |
@@ -163,7 +163,7 @@ const result = await refreshDeps({
   // allowMajor: true,
   // ignoreWorkspace: false, // forward --ignore-workspace to pnpm
   // summary: true,          // render terminal summary at the end
-  // summaryFile: './summary.txt',
+  // summaryFile: './summary.txt',  // must resolve within the workspace root
   // confirm: async ({ force, dryRun }) => true, // override the destructive-action prompt
   // pnpm: customPnpmRunner, // inject a fake/recording PnpmRunner in tests
 });

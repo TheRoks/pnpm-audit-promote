@@ -377,4 +377,65 @@ describe('renderTerminalSummary', () => {
     );
     expect(out).not.toMatch(/CVE resolved/);
   });
+
+  it('sanitizes ANSI and control characters in advisory fields', () => {
+    const out = renderTerminalSummary(
+      fixture({
+        initialAdvisories: [
+          {
+            id: '201',
+            module: 'lod\u001b[31mash\u001b[0m',
+            severity: 'high',
+            title: 'Prototype\r\nPollution\tDetected',
+            cves: ['CVE-2020-8203\u0007'],
+          },
+        ],
+      }),
+      { color: false },
+    );
+
+    expect(out).toMatch(/HIGH\s+lodash\s+CVE-2020-8203\s+Prototype Pollution Detected/);
+    expect(out).not.toContain('\u0007');
+    expect(out).not.toContain('\r');
+    expect(out).not.toContain('\u001b[');
+  });
+
+  it('strips OSC hyperlink control sequences from advisory titles', () => {
+    const out = renderTerminalSummary(
+      fixture({
+        initialAdvisories: [
+          {
+            id: '202',
+            module: 'pkg',
+            severity: 'low',
+            title: '\u001b]8;;https://evil.test\u0007click\u001b]8;;\u0007',
+            cves: [],
+          },
+        ],
+      }),
+      { color: false },
+    );
+
+    expect(out).toContain('click');
+    expect(out).not.toContain('evil.test');
+  });
+
+  it('keeps advisory rows single-line after sanitization', () => {
+    const out = renderTerminalSummary(
+      fixture({
+        initialAdvisories: [
+          {
+            id: '203',
+            module: 'newline-mod',
+            severity: 'moderate',
+            title: 'Line1\nLine2\r\nLine3',
+            cves: ['CVE-1'],
+          },
+        ],
+      }),
+      { color: false },
+    );
+
+    expect(out).toMatch(/MODERATE\s+newline-mod\s+CVE-1\s+Line1 Line2 Line3/);
+  });
 });

@@ -113,6 +113,74 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(pj.pnpm).toBeUndefined();
   });
 
+  it('throws EnclosingWorkspaceError when a parent workspace is detected', async () => {
+    const sub = path.join(tmp, 'examples', 'angular');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "packages:\n  - 'examples/*'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(sub, 'package.json'),
+      JSON.stringify({ name: 'sub', pnpm: { overrides: {} } }),
+      'utf8',
+    );
+
+    const { runner } = makeRecordingRunner();
+
+    await expect(
+      refreshDeps({
+        path: sub,
+        force: true,
+        logger: silentLogger,
+        pnpm: runner,
+        skipAudit: true,
+        skipDedupe: true,
+      }),
+    ).rejects.toThrow(/enclosing pnpm workspace/i);
+  });
+
+  it('honors ignoreWorkspace and proceeds despite an enclosing workspace', async () => {
+    const sub = path.join(tmp, 'examples', 'angular');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "packages:\n  - 'examples/*'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(sub, 'package.json'),
+      JSON.stringify({ name: 'sub', pnpm: { overrides: { react: '18.3.1' } } }),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(sub, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8');
+
+    const { runner, calls } = makeRecordingRunner();
+
+    const result = await refreshDeps({
+      path: sub,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      ignoreWorkspace: true,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(false);
+    // The local sub-package's lockfile is removed, but the parent's is untouched.
+    expect(fs.existsSync(path.join(sub, 'pnpm-lock.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(true);
+    const installs = calls.filter((c) => c.args[0] === 'install');
+    expect(installs).toHaveLength(1);
+    // pnpm.overrides was stripped from the sub-package's package.json
+    const pj = JSON.parse(fs.readFileSync(path.join(sub, 'package.json'), 'utf8')) as {
+      pnpm?: unknown;
+    };
+    expect(pj.pnpm).toBeUndefined();
+  });
+
   it('dry-run does not delete the lockfile or invoke pnpm', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),

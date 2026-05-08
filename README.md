@@ -36,12 +36,16 @@ npx pnpm-audit-promote
 
 Requires Node.js >= 22 and `pnpm` available on `PATH`.
 
-The target directory qualifies as a workspace root when it contains either:
+The target directory qualifies as a workspace root when **any** of the following are present:
 
 - `pnpm-workspace.yaml`, or
-- `package.json` whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"`).
+- `pnpm-lock.yaml`, or
+- `package.json` whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"`), or
+- `package.json` with a `pnpm` config object (e.g. a bare `pnpm.overrides`).
 
 When `pnpm-workspace.yaml` is absent, the tool still runs the lockfile / `node_modules` cleanup, strips `pnpm.overrides` from `package.json`, and runs `pnpm install` and `pnpm audit --fix`. Catalog promotion steps are skipped because pnpm catalogs only live in `pnpm-workspace.yaml`.
+
+If an **enclosing** `pnpm-workspace.yaml` is found in any parent directory, the tool refuses to run by default and throws `EnclosingWorkspaceError`. This prevents `pnpm install` from silently walking up and mutating the parent monorepo's lockfile and `pnpm-workspace.yaml`. To proceed, either re-run with `--path <enclosing workspace root>` to operate on the parent, or pass `--ignore-workspace` to keep all operations local to `--path`.
 
 ## Usage
 
@@ -49,24 +53,33 @@ When `pnpm-workspace.yaml` is absent, the tool still runs the lockfile / `node_m
 pnpm-audit-promote [options]
 ```
 
-| Flag                        | Description                                                                              | Default |
-| --------------------------- | ---------------------------------------------------------------------------------------- | ------- |
-| `-p, --path <dir>`          | Workspace root (`pnpm-workspace.yaml` or `package.json` with `packageManager: pnpm@...`) | `cwd`   |
-| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt                                          | `false` |
-| `-n, --dry-run`             | Plan and log changes without writing files or pnpm                                       | `false` |
-| `--no-audit`                | Skip the audit + catalog promotion phase                                                 |         |
-| `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                 |         |
-| `-v, --verbose`             | Verbose output (raw pnpm output + tracing)                                               | `false` |
-| `-q, --quiet`               | Quiet output (warnings + errors only)                                                    | `false` |
-| `-V, --version`             | Print version                                                                            |         |
-| `-h, --help`                | Print help                                                                               |         |
+| Flag                        | Description                                                                                                                                                                                                | Default |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `-p, --path <dir>`          | Workspace root (`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `package.json` declaring pnpm)                                                                                                                 | `cwd`   |
+| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt                                                                                                                                                            | `false` |
+| `-n, --dry-run`             | Plan and log changes without writing files or pnpm                                                                                                                                                         | `false` |
+| `--no-audit`                | Skip the audit + catalog promotion phase                                                                                                                                                                   |         |
+| `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                                                                                                                                   |         |
+| `--allow-major`             | Allow catalog bumps that cross a major version boundary (still logged as warnings). Use `--no-allow-major` to refuse them and keep the bump as an override.                                                | `true`  |
+| `--no-summary`              | Suppress the terminal-pretty run summary printed at the end                                                                                                                                                |         |
+| `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path                                                                                                                                |         |
+| `--ignore-workspace`        | Treat `--path` as the workspace root even when an enclosing `pnpm-workspace.yaml` is found in a parent directory. Forwards `--ignore-workspace` to every pnpm invocation so installs/overrides stay local. | `false` |
+| `-v, --verbose`             | Verbose output (raw pnpm output + tracing)                                                                                                                                                                 | `false` |
+| `-q, --quiet`               | Quiet output (warnings + errors only)                                                                                                                                                                      | `false` |
+| `-V, --version`             | Print version                                                                                                                                                                                              |         |
+| `-h, --help`                | Print help                                                                                                                                                                                                 |         |
 
 ### Example
 
 ```sh
 pnpm-audit-promote --force
 pnpm-audit-promote --dry-run --verbose
+
+# operate on a single package nested inside another pnpm monorepo
+pnpm-audit-promote --path ./examples/angular-v20 --ignore-workspace --force
 ```
+
+A minimal end-to-end fixture lives under [`examples/basic`](./examples/basic/) — see its [README](./examples/basic/README.md) for a `--dry-run` walkthrough.
 
 ### Output modes
 
@@ -129,18 +142,46 @@ overrides:
 ```ts
 import { refreshDeps, createLogger } from 'pnpm-audit-promote';
 
-await refreshDeps({
+const result = await refreshDeps({
   path: '/path/to/workspace',
   force: true,
   dryRun: false,
   logger: createLogger({ level: 'verbose' }),
+  // Optional — all default-friendly:
+  // skipAudit: false,
+  // skipDedupe: false,
+  // allowMajor: true,
+  // ignoreWorkspace: false, // forward --ignore-workspace to pnpm
+  // summary: true,          // render terminal summary at the end
+  // summaryFile: './summary.txt',
+  // confirm: async ({ force, dryRun }) => true, // override the destructive-action prompt
+  // pnpm: customPnpmRunner, // inject a fake/recording PnpmRunner in tests
 });
+
+console.log(`Fixed ${result.fixedAdvisories.length} vulnerabilities in ${result.durationMs}ms.`);
 ```
 
-The exported surface includes `refreshDeps`, `createLogger`, `consoleLogger`,
-`silentLogger`, `WorkspaceState`, `createPnpmRunner`, and `ensurePnpmAvailable`.
-The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner`
-implementation, for example in tests.
+`refreshDeps` resolves to a [`RefreshResult`](./src/refresh.ts) with:
+
+- `canceled` — `true` when the destructive-action prompt was declined.
+- `durationMs` — wall-clock duration of the run.
+- `catalogChanges`, `overrideChanges` — direct-dep catalog bumps and the overrides that were added/modified.
+- `initialAdvisories`, `finalAdvisories`, `fixedAdvisories` — the audit-derived vulnerability sets before, after, and the diff.
+- `summary` — the full structured `RunSummaryData` regardless of the `summary` rendering flag (so CI can serialize it).
+
+### Exported surface
+
+`refreshDeps`, `RefreshOptions`, `RefreshResult`,
+`createLogger`, `consoleLogger`, `silentLogger`, `Logger`, `LogLevel`, `ConsoleLoggerOptions`,
+`WorkspaceState`,
+`createPnpmRunner`, `ensurePnpmAvailable`, `PnpmRunner`, `PnpmOptions`,
+`renderTerminalSummary`, `RenderOptions`,
+`AdvisorySummary`, `CatalogChange`, `OverrideChange`, `RunSummaryData`, `Severity`,
+`ConfirmFn`, `ConfirmContext`,
+and the typed errors
+`WorkspaceNotFoundError`, `EnclosingWorkspaceError`, `PnpmNotInstalledError`, `PnpmCommandFailedError`, `NonInteractiveConfirmationError`.
+
+The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` implementation (for tests or advanced integrations). The `confirm` option overrides the default stdin-based destructive-action prompt — useful in CI or when wrapping the tool in another UI.
 
 ## Limitations
 
@@ -161,6 +202,8 @@ implementation, for example in tests.
   `--force` (or `--yes`) when running from CI.
 - **A `node_modules` folder cannot be fully removed (Windows)** — close any
   process holding files open (editors, dev servers) and re-run.
+- **`Refusing to operate on '<path>': an enclosing pnpm workspace was found at '<parent>'`**
+  — the directory you targeted sits inside another pnpm workspace. `pnpm install` would walk up and mutate that parent's `pnpm-workspace.yaml` and `pnpm-lock.yaml`. Either re-run with `--path <parent>` to refresh the whole monorepo, or pass `--ignore-workspace` to keep every pnpm invocation local to your `--path`.
 
 ## Contributing
 

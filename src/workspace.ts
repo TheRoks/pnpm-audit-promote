@@ -4,7 +4,7 @@ import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
-import { WorkspaceNotFoundError } from './errors';
+import { EnclosingWorkspaceError, WorkspaceNotFoundError } from './errors';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -43,12 +43,21 @@ export class WorkspaceState {
     this.rootPackageJson = path.join(workspaceRoot, 'package.json');
   }
 
-  static initialize(workspacePath: string, options: { dryRun?: boolean } = {}): WorkspaceState {
+  static initialize(
+    workspacePath: string,
+    options: { dryRun?: boolean; ignoreParentWorkspace?: boolean } = {},
+  ): WorkspaceState {
     const root = path.resolve(workspacePath);
     const ws = new WorkspaceState(root);
     const yamlExists = fs.existsSync(ws.workspaceYaml);
-    if (!yamlExists && !hasPnpmPackageManager(ws.rootPackageJson)) {
+    if (!yamlExists && !hasPnpmSignal(ws.rootPackageJson, ws.lockFile)) {
       throw new WorkspaceNotFoundError(root);
+    }
+    if (!yamlExists && !options.ignoreParentWorkspace) {
+      const enclosing = findEnclosingPnpmWorkspaceYaml(root);
+      if (enclosing) {
+        throw new EnclosingWorkspaceError(root, enclosing);
+      }
     }
     ws.hasWorkspaceYaml = yamlExists;
     ws.dryRun = options.dryRun ?? false;
@@ -99,18 +108,44 @@ export class WorkspaceState {
 }
 
 /**
- * Returns true when `pkgJsonPath` exists and its `packageManager` field
- * declares pnpm (e.g. `"pnpm@10.0.0"`). Returns false on any read/parse
- * failure so callers can treat it as a soft check.
+ * Returns true when `pkgJsonPath` looks like a pnpm-managed project, or when
+ * a `pnpm-lock.yaml` sits alongside it. We accept any of:
+ *   - `packageManager` field starting with `pnpm@`
+ *   - a `pnpm` config object (e.g. `pnpm.overrides`)
+ *   - a sibling `pnpm-lock.yaml`
+ *
+ * Returns false on any read/parse failure so callers can treat it as a soft check.
  */
-function hasPnpmPackageManager(pkgJsonPath: string): boolean {
+function hasPnpmSignal(pkgJsonPath: string, lockFilePath: string): boolean {
+  if (fs.existsSync(lockFilePath)) return true;
   try {
     const text = fs.readFileSync(pkgJsonPath, 'utf8');
-    const parsed = JSON.parse(text) as { packageManager?: unknown };
+    const parsed = JSON.parse(text) as { packageManager?: unknown; pnpm?: unknown };
     const pm = parsed.packageManager;
-    return typeof pm === 'string' && /^pnpm@/i.test(pm.trim());
+    if (typeof pm === 'string' && /^pnpm@/i.test(pm.trim())) return true;
+    if (parsed.pnpm !== null && typeof parsed.pnpm === 'object') return true;
+    return false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Walks parent directories looking for a `pnpm-workspace.yaml`. Returns the
+ * absolute directory path that contains it, or `null` when no such ancestor
+ * exists. Mirrors pnpm's own upward workspace lookup so we can detect when
+ * `pnpm install` would escape the directory the caller asked us to operate
+ * on. The starting directory itself is intentionally excluded.
+ */
+export function findEnclosingPnpmWorkspaceYaml(startDir: string): string | null {
+  let current = path.resolve(startDir);
+  while (true) {
+    const parent = path.dirname(current);
+    if (parent === current) return null; // reached filesystem root
+    if (fs.existsSync(path.join(parent, 'pnpm-workspace.yaml'))) {
+      return parent;
+    }
+    current = parent;
   }
 }
 

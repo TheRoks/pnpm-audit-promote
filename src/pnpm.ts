@@ -27,6 +27,12 @@ export interface PnpmOptions {
   progressIntervalMs?: number;
   /** When true, log commands but do not execute pnpm. Captures return empty stdout. */
   dryRun?: boolean;
+  /**
+   * Additional arguments appended to every pnpm invocation. Used to forward
+   * flags like `--ignore-workspace` so pnpm doesn't walk up to a parent
+   * workspace.
+   */
+  extraArgs?: readonly string[];
 }
 
 export function createPnpmRunner({
@@ -36,42 +42,48 @@ export function createPnpmRunner({
   spinner = true,
   progressIntervalMs = 20_000,
   dryRun = false,
+  extraArgs = [],
 }: PnpmOptions): PnpmRunner {
+  const withExtras = (args: string[]): string[] =>
+    extraArgs.length > 0 ? [...args, ...extraArgs] : args;
   return {
     async run(args) {
-      logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${args.join(' ')}`);
+      const finalArgs = withExtras(args);
+      logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${finalArgs.join(' ')}`);
       if (dryRun) return;
       const code = await runWithProgress({
-        args,
+        args: finalArgs,
         logger,
         enabled: !inheritOutput,
         spinner,
         progressIntervalMs,
-        execute: () => spawnPnpm(args, { cwd, inheritOutput }),
+        execute: () => spawnPnpm(finalArgs, { cwd, inheritOutput }),
       });
       if (code !== 0) {
-        throw new PnpmCommandFailedError(args, code);
+        throw new PnpmCommandFailedError(finalArgs, code);
       }
     },
     async runAllowFail(args) {
-      logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${args.join(' ')}`);
+      const finalArgs = withExtras(args);
+      logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${finalArgs.join(' ')}`);
       if (dryRun) return 0;
       return runWithProgress({
-        args,
+        args: finalArgs,
         logger,
         enabled: !inheritOutput,
         spinner,
         progressIntervalMs,
-        execute: () => spawnPnpm(args, { cwd, inheritOutput }),
+        execute: () => spawnPnpm(finalArgs, { cwd, inheritOutput }),
       });
     },
     async capture(args) {
+      const finalArgs = withExtras(args);
       if (dryRun) {
-        logger.trace?.(`(dry-run) pnpm ${args.join(' ')} (capture)`);
+        logger.trace?.(`(dry-run) pnpm ${finalArgs.join(' ')} (capture)`);
         return { stdout: '', exitCode: 0 };
       }
       return new Promise((resolve, reject) => {
-        const child = spawn(PNPM, args, {
+        const child = spawn(PNPM, finalArgs, {
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
         });

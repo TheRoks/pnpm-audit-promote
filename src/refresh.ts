@@ -246,6 +246,11 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   if (!state.hasWorkspaceYaml) {
     logger.info('No pnpm-workspace.yaml detected — catalog promotion steps will be skipped.');
   }
+  if (!state.isMultiPackageWorkspace) {
+    logger.info(
+      'Single-package mode: cleanup and audit-driven bumps are confined to the workspace root.',
+    );
+  }
 
   // Detect the pnpm version of the *target* workspace. The CLI itself ships
   // pinned to a specific pnpm version (via its own `packageManager` field),

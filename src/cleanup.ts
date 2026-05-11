@@ -44,7 +44,15 @@ export async function removeNodeModulesFolders(
   logger: Logger,
 ): Promise<void> {
   logger.step('Remove node_modules directories');
-  const dirs = findNodeModulesFolders(state.workspaceRoot);
+  let dirs: string[];
+  if (state.isMultiPackageWorkspace) {
+    dirs = findNodeModulesFolders(state.workspaceRoot);
+  } else {
+    // Single-package mode: only the workspace root's own node_modules is
+    // eligible. The mode banner is emitted once in `prepareRun`.
+    const rootNodeModules = path.join(state.workspaceRoot, 'node_modules');
+    dirs = fs.existsSync(rootNodeModules) ? [rootNodeModules] : [];
+  }
   if (dirs.length === 0) {
     logger.detail('No node_modules directories found.');
     return;
@@ -133,10 +141,18 @@ export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Log
 export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger): void {
   logger.step("Remove 'pnpm.overrides' from package.json files");
 
-  const packageDirs = resolveWorkspacePackageDirs(state);
-  const packageJsons = findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
-    (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
-  );
+  let packageJsons: string[];
+  if (state.isMultiPackageWorkspace) {
+    const packageDirs = resolveWorkspacePackageDirs(state);
+    packageJsons = findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
+      (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
+    );
+  } else {
+    // Single-package mode: only the root package.json. The mode banner is
+    // emitted once in `prepareRun`; `WorkspaceState.initialize` already
+    // guarantees the root package.json exists in this branch.
+    packageJsons = [state.rootPackageJson];
+  }
 
   for (const pjPath of packageJsons) {
     let text: string;

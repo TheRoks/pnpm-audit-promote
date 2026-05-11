@@ -29,6 +29,17 @@ export class WorkspaceState {
   hasWorkspaceYaml = false;
 
   /**
+   * True when the workspace is a multi-package workspace, i.e. either
+   * `pnpm-workspace.yaml` exists at the root, or the root `package.json`
+   * declares a non-empty `workspaces` array. When false, the project is a
+   * single-package project: recursive operations
+   * (`removeNodeModulesFolders`, `removePackageJsonOverrides`, audit
+   * direct-dep package.json bumps) are confined to the root directory and
+   * must not touch nested unrelated projects.
+   */
+  isMultiPackageWorkspace = false;
+
+  /**
    * Snapshot of the *desired* pnpm-workspace.yaml content. Re-applied after
    * every pnpm command, because pnpm 10 normalizes the file on install/up
    * and silently drops settings (e.g. `savePrefix: ''`) and bumps catalog
@@ -85,7 +96,10 @@ export class WorkspaceState {
     const root = path.resolve(workspacePath);
     const ws = new WorkspaceState(root);
     const yamlExists = fs.existsSync(ws.workspaceYaml);
-    if (!yamlExists && !hasPnpmSignal(ws.rootPackageJson, ws.lockFile)) {
+    // Parse the root package.json at most once, then derive every signal
+    // we need from the same parsed object. `null` means absent or unreadable.
+    const rootPkg = readJsonFile(ws.rootPackageJson);
+    if (!yamlExists && !hasPnpmSignal(rootPkg, ws.lockFile)) {
       throw new WorkspaceNotFoundError(root);
     }
     if (!yamlExists && !options.ignoreParentWorkspace) {
@@ -95,6 +109,7 @@ export class WorkspaceState {
       }
     }
     ws.hasWorkspaceYaml = yamlExists;
+    ws.isMultiPackageWorkspace = yamlExists || hasRootWorkspacesField(rootPkg);
     ws.dryRun = options.dryRun ?? false;
     if (yamlExists) {
       ws.detectEol();
@@ -225,24 +240,55 @@ export class WorkspaceState {
  *   - a `pnpm` config object (e.g. `pnpm.overrides`)
  *   - a sibling `pnpm-lock.yaml`
  *
- * Returns false on any read/parse failure so callers can treat it as a soft check.
+ * Receives an already-parsed root `package.json` so {@link WorkspaceState.initialize}
+ * only reads the file once. `null` is the "absent or unreadable" signal.
  */
-function hasPnpmSignal(pkgJsonPath: string, lockFilePath: string): boolean {
+function hasPnpmSignal(rootPkg: unknown, lockFilePath: string): boolean {
   if (fs.existsSync(lockFilePath)) return true;
+  if (rootPkg === null || typeof rootPkg !== 'object') return false;
+  const parsed = rootPkg as {
+    packageManager?: unknown;
+    pnpm?: unknown;
+    devEngines?: unknown;
+  };
+  const pm = parsed.packageManager;
+  if (typeof pm === 'string' && /^pnpm@/i.test(pm.trim())) return true;
+  if (parsed.pnpm !== null && typeof parsed.pnpm === 'object') return true;
+  if (devEnginesNamesPnpm(parsed.devEngines)) return true;
+  return false;
+}
+
+/**
+ * Returns true when the root `package.json` declares a non-empty `workspaces`
+ * field (npm/yarn-style array, or `{ packages: [...] }` object). pnpm itself
+ * ignores this field, but its presence is a clear signal of multi-package
+ * intent and is used to distinguish a single-package project from a
+ * workspace-without-yaml.
+ */
+function hasRootWorkspacesField(rootPkg: unknown): boolean {
+  if (rootPkg === null || typeof rootPkg !== 'object') return false;
+  const ws = (rootPkg as { workspaces?: unknown }).workspaces;
+  if (Array.isArray(ws)) {
+    return ws.some((w) => typeof w === 'string' && w.trim().length > 0);
+  }
+  if (ws !== null && typeof ws === 'object') {
+    const packages = (ws as { packages?: unknown }).packages;
+    return (
+      Array.isArray(packages) && packages.some((w) => typeof w === 'string' && w.trim().length > 0)
+    );
+  }
+  return false;
+}
+
+/**
+ * Read and parse a JSON file. Returns `null` on any read or parse failure
+ * so callers can treat it as "absent or unreadable" without try/catch noise.
+ */
+function readJsonFile(filePath: string): unknown {
   try {
-    const text = fs.readFileSync(pkgJsonPath, 'utf8');
-    const parsed = JSON.parse(text) as {
-      packageManager?: unknown;
-      pnpm?: unknown;
-      devEngines?: unknown;
-    };
-    const pm = parsed.packageManager;
-    if (typeof pm === 'string' && /^pnpm@/i.test(pm.trim())) return true;
-    if (parsed.pnpm !== null && typeof parsed.pnpm === 'object') return true;
-    if (devEnginesNamesPnpm(parsed.devEngines)) return true;
-    return false;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch {
-    return false;
+    return null;
   }
 }
 

@@ -30,3 +30,38 @@ jobs:
       - name: publint
         if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         run: pnpm run check:exports
+
+  # Smoke-test the built CLI against a workspace that uses pnpm 11. The
+  # toolchain itself stays on pnpm 10 (see packageManager in package.json),
+  # so this job uses npm to install pnpm@11 globally rather than relying on
+  # corepack/pnpm-action-setup picking it up.
+  integration-pnpm11:
+    name: Integration (pnpm 11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install repo deps and build CLI (with pnpm 10)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Install pnpm 11 alongside pnpm 10
+        run: npm install -g pnpm@11
+      - name: Smoke test against examples/pnpm11 (dry-run)
+        run: |
+          pnpm --version
+          node dist/cli.js --path examples/pnpm11 --force --no-audit --dry-run --no-summary
+      - name: Exercise pnpm 11 audit path and verify minimumReleaseAge restore
+        run: |
+          tmp_dir="$(mktemp -d)"
+          cp -R examples/pnpm11 "$tmp_dir/workspace"
+          node dist/cli.js --path "$tmp_dir/workspace" --force --no-summary --no-dedupe
+          grep -q '^minimumReleaseAge: 720$' "$tmp_dir/workspace/pnpm-workspace.yaml"
+          if grep -q '^minimumReleaseAge: 0$' "$tmp_dir/workspace/pnpm-workspace.yaml"; then
+            echo 'temporary minimumReleaseAge override leaked into final workspace yaml'
+            exit 1
+          fi

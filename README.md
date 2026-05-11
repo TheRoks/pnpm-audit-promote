@@ -34,13 +34,23 @@ pnpm dlx pnpm-audit-promote
 npx pnpm-audit-promote
 ```
 
-Requires Node.js >= 22 and `pnpm` available on `PATH`.
+Requires Node.js >= 22 and `pnpm` (10 or 11) available on `PATH`.
+
+### pnpm 11 notes
+
+`pnpm-audit-promote` runs against both pnpm 10 and pnpm 11 workspaces. When it detects pnpm 11 it makes two adjustments for the duration of the run:
+
+- Temporarily sets `minimumReleaseAge: 0` in `pnpm-workspace.yaml` so freshly-published patch releases are not gated by pnpm 11's new 1-day default. Your original value (or absence of the key) is restored before the tool exits.
+- Merges any `minimumReleaseAgeExclude` entries pnpm 11 writes during `pnpm audit --fix` back into the file, so the security excludes are preserved across the catalog-restoration step.
+
+`pnpm.overrides` defined in `package.json` are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
 
 The target directory qualifies as a workspace root when **any** of the following are present:
 
 - `pnpm-workspace.yaml`, or
 - `pnpm-lock.yaml`, or
-- `package.json` whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"`), or
+- `package.json` whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"` or `"pnpm@11.0.0"`), or
+- `package.json` whose `devEngines.packageManager` names pnpm (string form `"pnpm@11.x"` or object form `{ "name": "pnpm" }`; the format pnpm 11's `pnpm init` writes), or
 - `package.json` with a `pnpm` config object (e.g. a bare `pnpm.overrides`).
 
 When `pnpm-workspace.yaml` is absent, the tool still runs the lockfile / `node_modules` cleanup, strips `pnpm.overrides` from `package.json`, and runs `pnpm install` and `pnpm audit --fix`. Catalog promotion steps are skipped because pnpm catalogs only live in `pnpm-workspace.yaml`.

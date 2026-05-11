@@ -79,7 +79,20 @@ export async function getDirectDepCatalogBumps(
     logger.warn('Could not parse audit JSON. Skipping pre-audit catalog bump.');
     return { bumps, tiers };
   }
-  if (!audit.advisories) return { bumps, tiers };
+  if (!audit.advisories) {
+    // pnpm 11 switched to the bulk-advisories endpoint but kept the
+    // top-level `advisories` map. If we see an unrecognized shape, surface
+    // a warning so the user knows to file an issue rather than silently
+    // skip every advisory.
+    const keys = Object.keys((audit as Record<string, unknown>) ?? {});
+    if (keys.length > 0) {
+      logger.warn(
+        `Audit JSON did not include an \`advisories\` field (saw: ${keys.join(', ')}). ` +
+          'This may indicate an unsupported pnpm audit output shape.',
+      );
+    }
+    return { bumps, tiers };
+  }
 
   const { names: catalogNames, versions: catalogVersions } = readCatalog(
     state.desiredWorkspaceYaml,

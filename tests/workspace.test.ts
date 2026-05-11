@@ -3,7 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { silentLogger } from '../src/logger';
-import { WorkspaceState, resolveWorkspacePackageDirs } from '../src/workspace';
+import {
+  WorkspaceState,
+  detectWorkspacePnpmMajor,
+  resolveWorkspacePackageDirs,
+} from '../src/workspace';
 
 let tmp: string;
 
@@ -153,6 +157,91 @@ describe('WorkspaceState', () => {
     ws.desiredWorkspaceYaml = '';
     expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
   });
+
+  it('initializes from package.json with devEngines.packageManager (string form)', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', devEngines: { packageManager: 'pnpm@11.0.0' } }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+  });
+
+  it('initializes from package.json with devEngines.packageManager (object form)', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({
+        name: 'x',
+        devEngines: { packageManager: { name: 'pnpm', version: '11' } },
+      }),
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    expect(ws.hasWorkspaceYaml).toBe(false);
+  });
+
+  it('rejects devEngines.packageManager that names a non-pnpm manager', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'x', devEngines: { packageManager: 'yarn@4.0.0' } }),
+      'utf8',
+    );
+    expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
+  });
+
+  it('applies and reverts pnpm 11 minimumReleaseAge tweaks when major >= 11', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    ws.recordPnpmMajor(11);
+    ws.applyPnpm11WorkspaceTweaks(silentLogger);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain(
+      'minimumReleaseAge: 0',
+    );
+    expect(ws.pnpm11TweaksApplied).toBe(true);
+    ws.revertPnpm11WorkspaceTweaks(silentLogger);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(
+      'minimumReleaseAge',
+    );
+    expect(ws.pnpm11TweaksApplied).toBe(false);
+  });
+
+  it('restores the original minimumReleaseAge scalar after the run', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "minimumReleaseAge: 720\ncatalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    ws.recordPnpmMajor(11);
+    ws.applyPnpm11WorkspaceTweaks(silentLogger);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain(
+      'minimumReleaseAge: 0',
+    );
+    ws.revertPnpm11WorkspaceTweaks(silentLogger);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain(
+      'minimumReleaseAge: 720',
+    );
+  });
+
+  it('does not touch the yaml when pnpm major is < 11', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    ws.recordPnpmMajor(10);
+    ws.applyPnpm11WorkspaceTweaks(silentLogger);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(
+      'minimumReleaseAge',
+    );
+    expect(ws.pnpm11TweaksApplied).toBe(false);
+  });
 });
 
 describe('resolveWorkspacePackageDirs', () => {
@@ -246,5 +335,104 @@ describe('resolveWorkspacePackageDirs', () => {
     const dirs = resolveWorkspacePackageDirs(ws);
     expect(dirs?.has(path.join(tmp, 'packages', 'a'))).toBe(true);
     expect(dirs?.has(path.join(tmp, 'packages', 'a', 'sub'))).toBe(true);
+  });
+});
+
+describe('detectWorkspacePnpmMajor', () => {
+  function write(json: unknown): string {
+    const p = path.join(tmp, 'package.json');
+    fs.writeFileSync(p, JSON.stringify(json), 'utf8');
+    return p;
+  }
+
+  it('returns the major from `packageManager: pnpm@<major>.<minor>.<patch>`', () => {
+    const p = write({ name: 'x', packageManager: 'pnpm@11.0.0' });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('returns the major from `packageManager: pnpm@10.33.0`', () => {
+    const p = write({ name: 'x', packageManager: 'pnpm@10.33.0' });
+    expect(detectWorkspacePnpmMajor(p)).toBe(10);
+  });
+
+  it('returns the major from bare-major `packageManager: pnpm@11`', () => {
+    const p = write({ name: 'x', packageManager: 'pnpm@11' });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('accepts a corepack integrity suffix on packageManager', () => {
+    const p = write({ name: 'x', packageManager: 'pnpm@11.0.0+sha512.deadbeef' });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('returns null when packageManager pins a different tool', () => {
+    const p = write({ name: 'x', packageManager: 'yarn@4.0.0' });
+    expect(detectWorkspacePnpmMajor(p)).toBeNull();
+  });
+
+  it('returns the major from devEngines.packageManager string form', () => {
+    const p = write({ name: 'x', devEngines: { packageManager: 'pnpm@11.0.0' } });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('returns the major from devEngines.packageManager bare-major string', () => {
+    const p = write({ name: 'x', devEngines: { packageManager: 'pnpm@11' } });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('returns the major from devEngines.packageManager object form', () => {
+    const p = write({
+      name: 'x',
+      devEngines: { packageManager: { name: 'pnpm', version: '11.0.0' } },
+    });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('strips semver range operators from devEngines version', () => {
+    const p = write({
+      name: 'x',
+      devEngines: { packageManager: { name: 'pnpm', version: '^11.0.0' } },
+    });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('handles devEngines version `>=11`', () => {
+    const p = write({
+      name: 'x',
+      devEngines: { packageManager: { name: 'pnpm', version: '>=11' } },
+    });
+    expect(detectWorkspacePnpmMajor(p)).toBe(11);
+  });
+
+  it('ignores devEngines entries for other package managers', () => {
+    const p = write({
+      name: 'x',
+      devEngines: { packageManager: { name: 'yarn', version: '4.0.0' } },
+    });
+    expect(detectWorkspacePnpmMajor(p)).toBeNull();
+  });
+
+  it('prefers packageManager over devEngines when both are present', () => {
+    const p = write({
+      name: 'x',
+      packageManager: 'pnpm@10.33.0',
+      devEngines: { packageManager: { name: 'pnpm', version: '11.0.0' } },
+    });
+    expect(detectWorkspacePnpmMajor(p)).toBe(10);
+  });
+
+  it('returns null when package.json is missing', () => {
+    expect(detectWorkspacePnpmMajor(path.join(tmp, 'does-not-exist.json'))).toBeNull();
+  });
+
+  it('returns null when package.json is malformed', () => {
+    const p = path.join(tmp, 'package.json');
+    fs.writeFileSync(p, '{ not json', 'utf8');
+    expect(detectWorkspacePnpmMajor(p)).toBeNull();
+  });
+
+  it('returns null when neither field is declared', () => {
+    const p = write({ name: 'x' });
+    expect(detectWorkspacePnpmMajor(p)).toBeNull();
   });
 });

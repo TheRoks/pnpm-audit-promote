@@ -1,0 +1,9 @@
+{
+  "name": "example-pnpm11",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.0.0",
+  "dependencies": {
+    "lodash": "4.17.21"
+  }
+}

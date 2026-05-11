@@ -9,6 +9,26 @@ export interface PnpmRunner {
   capture(args: string[]): Promise<{ stdout: string; exitCode: number }>;
   /** Run pnpm without throwing on non-zero exit. */
   runAllowFail(args: string[]): Promise<number>;
+  /**
+   * Return the pnpm version string reported by `pnpm --version` (e.g. `10.33.0`
+   * or `11.0.0`). Cached after the first call. Returns an empty string when
+   * pnpm is unavailable or its output cannot be read.
+   */
+  version(): Promise<string>;
+}
+
+/**
+ * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, ...) into its major
+ * component. Returns `null` when the input cannot be interpreted, which the
+ * caller should treat as "pnpm 10 (legacy) behavior".
+ */
+export function getPnpmMajor(version: string): number | null {
+  const trimmed = version.trim();
+  if (!trimmed) return null;
+  const match = /^v?(\d+)\./.exec(trimmed);
+  if (!match) return null;
+  const major = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(major) ? major : null;
 }
 
 const PNPM = 'pnpm';
@@ -46,7 +66,28 @@ export function createPnpmRunner({
 }: PnpmOptions): PnpmRunner {
   const withExtras = (args: string[]): string[] =>
     extraArgs.length > 0 ? [...args, ...extraArgs] : args;
+  let cachedVersion: string | undefined;
   return {
+    async version() {
+      if (cachedVersion !== undefined) return cachedVersion;
+      if (dryRun) {
+        cachedVersion = '';
+        return cachedVersion;
+      }
+      cachedVersion = await new Promise<string>((resolve) => {
+        const child = spawn(PNPM, ['--version'], {
+          cwd,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        let stdout = '';
+        child.stdout?.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8');
+        });
+        child.on('error', () => resolve(''));
+        child.on('close', () => resolve(stdout.trim()));
+      });
+      return cachedVersion;
+    },
     async run(args) {
       const finalArgs = withExtras(args);
       logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${finalArgs.join(' ')}`);
@@ -205,7 +246,9 @@ function createSpinner(options: { command: string; enabled: boolean }): {
 function toSpinnerLabel(command: string): string {
   if (command === 'pnpm install') return 'Installing dependencies';
   if (command === 'pnpm dedupe') return 'Optimizing dependency graph';
-  if (command === 'pnpm audit --fix') return 'Applying security fixes';
+  if (command === 'pnpm audit --fix' || command.startsWith('pnpm audit --fix ')) {
+    return 'Applying security fixes';
+  }
   const shortCommand = command.startsWith('pnpm ') ? command.slice(5) : command;
   return `Running ${shortCommand}`;
 }

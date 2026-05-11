@@ -8,7 +8,7 @@ vi.mock('cross-spawn', () => ({
   default: spawnMock,
 }));
 
-import { createPnpmRunner, ensurePnpmAvailable } from '../src/pnpm';
+import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor } from '../src/pnpm';
 
 function makeLogger(): Logger {
   return {
@@ -338,5 +338,65 @@ describe('createPnpmRunner output gating', () => {
     });
 
     await expect(ensurePnpmAvailable()).rejects.toThrow(/pnpm is not installed/);
+  });
+});
+
+describe('getPnpmMajor', () => {
+  it('parses major numbers from common pnpm version strings', () => {
+    expect(getPnpmMajor('10.33.0')).toBe(10);
+    expect(getPnpmMajor('11.0.0')).toBe(11);
+    expect(getPnpmMajor('11.0.0-rc.1')).toBe(11);
+    expect(getPnpmMajor('v11.2.3')).toBe(11);
+    expect(getPnpmMajor('  10.33.0\n')).toBe(10);
+  });
+
+  it('returns null for unparseable input', () => {
+    expect(getPnpmMajor('')).toBeNull();
+    expect(getPnpmMajor('not a version')).toBeNull();
+    expect(getPnpmMajor('latest')).toBeNull();
+  });
+});
+
+describe('PnpmRunner version()', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it('caches the result of `pnpm --version`', async () => {
+    spawnMock.mockImplementationOnce(() => makeChildWithStdout(0, '11.0.0\n'));
+    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    expect(await runner.version()).toBe('11.0.0');
+    expect(await runner.version()).toBe('11.0.0');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledWith(
+      'pnpm',
+      ['--version'],
+      expect.objectContaining({ cwd: '/tmp/workspace', stdio: ['ignore', 'pipe', 'ignore'] }),
+    );
+  });
+
+  it('returns an empty string in dry-run mode', async () => {
+    const runner = createPnpmRunner({
+      cwd: '/tmp/workspace',
+      logger: makeLogger(),
+      dryRun: true,
+    });
+    expect(await runner.version()).toBe('');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty string when pnpm fails to launch', async () => {
+    spawnMock.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter };
+      child.stdout = new EventEmitter();
+      queueMicrotask(() => {
+        const err = new Error('missing') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        child.emit('error', err);
+      });
+      return child;
+    });
+    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    expect(await runner.version()).toBe('');
   });
 });

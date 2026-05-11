@@ -1,5 +1,16 @@
 # pnpm-audit-promote
 
+## [1.5.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.4.1...v1.5.0) (2026-05-11)
+
+
+### Features
+
+* **errors:** enhance error handling for enclosing workspaces ([6085ffe](https://github.com/TheRoks/pnpm-audit-promote/commit/6085ffe1cf0414f81d6568c74d26e5d1d9cbcdcb))
+* **pnpm:** support extraArgs for forwarding flags to pnpm invocations ([6085ffe](https://github.com/TheRoks/pnpm-audit-promote/commit/6085ffe1cf0414f81d6568c74d26e5d1d9cbcdcb))
+* **refresh:** include ignoreWorkspace option in refresh options ([6085ffe](https://github.com/TheRoks/pnpm-audit-promote/commit/6085ffe1cf0414f81d6568c74d26e5d1d9cbcdcb))
+* **workspace:** enhance pnpm integration with workspace detection and error handling ([#33](https://github.com/TheRoks/pnpm-audit-promote/issues/33)) ([6085ffe](https://github.com/TheRoks/pnpm-audit-promote/commit/6085ffe1cf0414f81d6568c74d26e5d1d9cbcdcb))
+* **workspace:** implement pnpm 11 workspace tweaks and related tests ([#35](https://github.com/TheRoks/pnpm-audit-promote/issues/35)) ([b3fcfa7](https://github.com/TheRoks/pnpm-audit-promote/commit/b3fcfa7b5db5d7eff553d91b08639342d6cd4796))
+
 ## [1.4.1](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.4.0...v1.4.1) (2026-05-06)
 
 

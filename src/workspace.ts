@@ -5,6 +5,12 @@ import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError } from './errors';
+import {
+  forceMinimumReleaseAgeZero,
+  getTopLevelScalar,
+  hasTopLevelKey,
+  restoreMinimumReleaseAge,
+} from './workspaceYamlPnpm11';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -36,6 +42,35 @@ export class WorkspaceState {
   /** When true, `saveWorkspaceYaml` and writes are no-ops. */
   dryRun = false;
 
+  /**
+   * Major version of the pnpm binary on PATH (10, 11, ...). `null` when
+   * detection failed or has not been performed yet. Set once via
+   * {@link recordPnpmMajor} during `prepareRun`. pnpm 11 triggers
+   * extra workspace-yaml handling (see {@link applyPnpm11WorkspaceTweaks}).
+   */
+  pnpmMajor: number | null = null;
+
+  /**
+   * Truly-original pnpm-workspace.yaml content as written by the user. Unlike
+   * `desiredWorkspaceYaml` this is never patched with the pnpm-11 working
+   * copy modifications (e.g. forced `minimumReleaseAge: 0`). Used to restore
+   * the user's exact configuration at the end of the run.
+   */
+  originalWorkspaceYaml = '';
+
+  /**
+   * Captured original value of the top-level `minimumReleaseAge` scalar, or
+   * `null` when the user had no such key. Used to undo the temporary
+   * `minimumReleaseAge: 0` injection at the end of a pnpm-11 run.
+   */
+  originalMinimumReleaseAge: string | null = null;
+
+  /**
+   * True when {@link applyPnpm11WorkspaceTweaks} injected `minimumReleaseAge: 0`
+   * for the duration of the run. Drives the matching cleanup step.
+   */
+  pnpm11TweaksApplied = false;
+
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.lockFile = path.join(workspaceRoot, 'pnpm-lock.yaml');
@@ -66,8 +101,81 @@ export class WorkspaceState {
       // Initialize the desired snapshot from the current file so that
       // `restoreWorkspaceYaml` is safe before any cleanup step has run.
       ws.desiredWorkspaceYaml = ws.readWorkspaceYaml();
+      ws.originalWorkspaceYaml = ws.desiredWorkspaceYaml;
     }
     return ws;
+  }
+
+  /**
+   * Record the detected pnpm major version. Caller should invoke this once,
+   * after the {@link PnpmRunner} has been created but before any pnpm
+   * command runs, so subsequent steps see a consistent value.
+   */
+  recordPnpmMajor(major: number | null): void {
+    this.pnpmMajor = major;
+  }
+
+  /**
+   * pnpm 11 ships several defaults that interfere with audit-driven catalog
+   * promotion. Most notably, `minimumReleaseAge` defaults to 1440 (1 day),
+   * which blocks `pnpm audit --fix` from picking up freshly-published patch
+   * releases. This method installs a working copy of `pnpm-workspace.yaml`
+   * with `minimumReleaseAge: 0` for the duration of the run; the original
+   * value is restored by {@link revertPnpm11WorkspaceTweaks}.
+   *
+   * No-op when pnpm major is not 11+, when no `pnpm-workspace.yaml` exists,
+   * or when the workspace state is in dry-run mode (writes are suppressed).
+   */
+  applyPnpm11WorkspaceTweaks(logger: Logger): void {
+    if (this.pnpm11TweaksApplied) return;
+    if (this.pnpmMajor === null || this.pnpmMajor < 11) return;
+    if (!this.hasWorkspaceYaml) return;
+    // Capture the user-intended value (if any) and patch the working copy.
+    this.originalMinimumReleaseAge = getTopLevelScalar(
+      this.originalWorkspaceYaml,
+      'minimumReleaseAge',
+    );
+    // Only proceed when the original is a plain scalar (or absent). If the
+    // key exists as a block mapping, leave it alone — pnpm rejects scalar
+    // forms in that shape and we don't want to corrupt the file.
+    if (
+      this.originalMinimumReleaseAge === null &&
+      hasTopLevelKey(this.originalWorkspaceYaml, 'minimumReleaseAge')
+    ) {
+      logger.detail('Detected `minimumReleaseAge` as a block — leaving pnpm 11 defaults in place.');
+      return;
+    }
+    this.desiredWorkspaceYaml = forceMinimumReleaseAgeZero(this.desiredWorkspaceYaml);
+    this.saveWorkspaceYaml(this.desiredWorkspaceYaml);
+    this.pnpm11TweaksApplied = true;
+    logger.detail(
+      this.originalMinimumReleaseAge === null
+        ? 'pnpm 11 detected: temporarily set `minimumReleaseAge: 0` for this run.'
+        : `pnpm 11 detected: temporarily overrode \`minimumReleaseAge\` (was ${this.originalMinimumReleaseAge}) for this run.`,
+    );
+  }
+
+  /**
+   * Undo {@link applyPnpm11WorkspaceTweaks}. Restores the user's original
+   * `minimumReleaseAge` value in the on-disk file (or removes the injected
+   * line entirely when the user had no such key). Safe to call when no
+   * tweaks were applied.
+   */
+  revertPnpm11WorkspaceTweaks(logger: Logger): void {
+    if (!this.pnpm11TweaksApplied) return;
+    if (!this.hasWorkspaceYaml) return;
+    const current = this.readWorkspaceYaml();
+    const restored = restoreMinimumReleaseAge(current, this.originalMinimumReleaseAge);
+    if (restored !== current) {
+      this.desiredWorkspaceYaml = restored;
+      this.saveWorkspaceYaml(restored);
+      logger.detail(
+        this.originalMinimumReleaseAge === null
+          ? 'Reverted temporary `minimumReleaseAge: 0` override.'
+          : `Restored original \`minimumReleaseAge: ${this.originalMinimumReleaseAge}\`.`,
+      );
+    }
+    this.pnpm11TweaksApplied = false;
   }
 
   detectEol(): void {
@@ -111,6 +219,9 @@ export class WorkspaceState {
  * Returns true when `pkgJsonPath` looks like a pnpm-managed project, or when
  * a `pnpm-lock.yaml` sits alongside it. We accept any of:
  *   - `packageManager` field starting with `pnpm@`
+ *   - `devEngines.packageManager` naming pnpm (string form `pnpm@...` or
+ *     object form `{ name: 'pnpm', ... }`); pnpm 11's `pnpm init` writes
+ *     this instead of the legacy `packageManager` field.
  *   - a `pnpm` config object (e.g. `pnpm.overrides`)
  *   - a sibling `pnpm-lock.yaml`
  *
@@ -120,14 +231,130 @@ function hasPnpmSignal(pkgJsonPath: string, lockFilePath: string): boolean {
   if (fs.existsSync(lockFilePath)) return true;
   try {
     const text = fs.readFileSync(pkgJsonPath, 'utf8');
-    const parsed = JSON.parse(text) as { packageManager?: unknown; pnpm?: unknown };
+    const parsed = JSON.parse(text) as {
+      packageManager?: unknown;
+      pnpm?: unknown;
+      devEngines?: unknown;
+    };
     const pm = parsed.packageManager;
     if (typeof pm === 'string' && /^pnpm@/i.test(pm.trim())) return true;
     if (parsed.pnpm !== null && typeof parsed.pnpm === 'object') return true;
+    if (devEnginesNamesPnpm(parsed.devEngines)) return true;
     return false;
   } catch {
     return false;
   }
+}
+
+/**
+ * Inspect a `devEngines.packageManager` field (pnpm 11+ format) and return
+ * true when it names pnpm. Supports both the string form (`"pnpm@11.0.0"`)
+ * and the object form (`{ name: "pnpm", version: "11" }`), as well as an
+ * array of such entries.
+ */
+function devEnginesNamesPnpm(devEngines: unknown): boolean {
+  if (devEngines === null || typeof devEngines !== 'object') return false;
+  const pm = (devEngines as { packageManager?: unknown }).packageManager;
+  return packageManagerEntryNamesPnpm(pm);
+}
+
+function packageManagerEntryNamesPnpm(entry: unknown): boolean {
+  if (typeof entry === 'string') {
+    return /^pnpm(@|$)/i.test(entry.trim());
+  }
+  if (Array.isArray(entry)) {
+    return entry.some(packageManagerEntryNamesPnpm);
+  }
+  if (entry !== null && typeof entry === 'object') {
+    const name = (entry as { name?: unknown }).name;
+    return typeof name === 'string' && name.trim().toLowerCase() === 'pnpm';
+  }
+  return false;
+}
+
+/**
+ * Detect the pnpm major version that the *target* workspace is pinned to,
+ * by inspecting its root `package.json`. This is the version that corepack
+ * (or the workspace's own toolchain) will actually invoke when we shell out
+ * to `pnpm`, which may differ from `pnpm --version` on PATH — most notably
+ * when the CLI itself is published with a different pnpm pin than the
+ * workspace it operates on.
+ *
+ * Search order (first non-null wins):
+ *   1. `packageManager: "pnpm@<version>"` (legacy field; still authoritative)
+ *   2. `devEngines.packageManager` — string form `"pnpm@<version>"` or
+ *      object form `{ name: "pnpm", version: "<version>" }`.
+ *
+ * Returns `null` when the workspace declares no pnpm version pin or when the
+ * pin cannot be parsed. Callers should treat `null` as "fall back to other
+ * detection" — never as "definitely pnpm 10".
+ */
+export function detectWorkspacePnpmMajor(pkgJsonPath: string): number | null {
+  let parsed: {
+    packageManager?: unknown;
+    devEngines?: unknown;
+  };
+  try {
+    parsed = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as typeof parsed;
+  } catch {
+    return null;
+  }
+  return (
+    extractMajorFromPackageManager(parsed.packageManager) ??
+    extractMajorFromDevEngines(parsed.devEngines)
+  );
+}
+
+function extractMajorFromPackageManager(pm: unknown): number | null {
+  if (typeof pm !== 'string') return null;
+  const trimmed = pm.trim();
+  // Accept `pnpm@10.33.0`, `pnpm@v11.0.0`, `pnpm@11`, and
+  // `pnpm@11.0.0+sha512-...` —
+  // corepack/pnpm allow an optional `+<integrity>` suffix after the version.
+  const match = /^pnpm@v?(\d+)(?:[.\s+]|$)/i.exec(trimmed);
+  if (!match) return null;
+  const major = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(major) ? major : null;
+}
+
+function extractMajorFromDevEngines(devEngines: unknown): number | null {
+  if (devEngines === null || typeof devEngines !== 'object') return null;
+  const pm = (devEngines as { packageManager?: unknown }).packageManager;
+  return extractMajorFromDevEnginesEntry(pm);
+}
+
+function extractMajorFromDevEnginesEntry(entry: unknown): number | null {
+  if (typeof entry === 'string') {
+    // Same shape as the legacy `packageManager` field (e.g. `pnpm@11`,
+    // `pnpm@^11.0.0`). Reuse the parser; range operators before the digits
+    // are not produced by `pnpm init` for the string form, so a strict
+    // `pnpm@<digits>.` match here is sufficient — but we relax it to also
+    // accept a bare `pnpm@11` (no trailing dot) since users do write that.
+    const trimmed = entry.trim();
+    const m = /^pnpm@v?(\d+)(?:[.\s]|$)/i.exec(trimmed);
+    if (!m) return null;
+    const major = Number.parseInt(m[1]!, 10);
+    return Number.isFinite(major) ? major : null;
+  }
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const v = extractMajorFromDevEnginesEntry(item);
+      if (v !== null) return v;
+    }
+    return null;
+  }
+  if (entry !== null && typeof entry === 'object') {
+    const obj = entry as { name?: unknown; version?: unknown };
+    if (typeof obj.name !== 'string' || obj.name.trim().toLowerCase() !== 'pnpm') return null;
+    if (typeof obj.version !== 'string') return null;
+    // Strip optional range operators (`^`, `~`, `>=`, etc.) before parsing
+    // the major. `>=11.0.0` and `^11` both resolve to 11.
+    const match = /v?(\d+)\b/.exec(obj.version);
+    if (!match) return null;
+    const major = Number.parseInt(match[1]!, 10);
+    return Number.isFinite(major) ? major : null;
+  }
+  return null;
 }
 
 /**

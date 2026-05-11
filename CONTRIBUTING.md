@@ -5,7 +5,7 @@ Thanks for your interest in contributing!
 ## Prerequisites
 
 - Node.js >= 22
-- pnpm >= 10
+- pnpm 10 (the toolchain in this repo is pinned to pnpm 10 via `packageManager`; pnpm 11 is supported as a target workspace and exercised in CI by the `integration-pnpm11` job, but is not required for local development)
 
 ## Setup
 

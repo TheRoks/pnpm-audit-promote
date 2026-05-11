@@ -1,7 +1,8 @@
 import * as path from 'node:path';
 import { consoleLogger, type Logger } from './logger';
-import { WorkspaceState } from './workspace';
-import { createPnpmRunner, ensurePnpmAvailable, type PnpmRunner } from './pnpm';
+import { WorkspaceState, detectWorkspacePnpmMajor } from './workspace';
+import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor, type PnpmRunner } from './pnpm';
+import { mergeMinimumReleaseAgeExclude } from './workspaceYamlPnpm11';
 import {
   removeNodeModulesFolders,
   removePackageJsonOverrides,
@@ -137,60 +138,68 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   const ctx = await prepareRun(options);
   const { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt } = ctx;
 
-  const confirm = options.confirm ?? defaultConfirmDestructive;
-  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
-    logger.info('Operation canceled by user.');
-    return canceledResult(Date.now() - startedAt);
-  }
+  try {
+    const confirm = options.confirm ?? defaultConfirmDestructive;
+    if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
+      logger.info('Operation canceled by user.');
+      return canceledResult(Date.now() - startedAt);
+    }
 
-  const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
+    const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
 
-  await runCleanupPhase(state, progressLogger);
+    await runCleanupPhase(state, progressLogger);
 
-  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
-    skipDedupe: Boolean(options.skipDedupe),
-    installLabel: 'Install dependencies',
-  });
-
-  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-  if (!skipAudit) {
-    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+    await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
       skipDedupe: Boolean(options.skipDedupe),
-      allowMajor: options.allowMajor ?? true,
-      dryRun,
-      preCleanupAuditRaw: initial.preCleanupAuditRaw,
+      installLabel: 'Install dependencies',
     });
-  } else {
-    logger.detail('Skipped audit and catalog promotion (--no-audit).');
+
+    let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+    if (!skipAudit) {
+      pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+        skipDedupe: Boolean(options.skipDedupe),
+        allowMajor: options.allowMajor ?? true,
+        dryRun,
+        preCleanupAuditRaw: initial.preCleanupAuditRaw,
+      });
+    } else {
+      logger.detail('Skipped audit and catalog promotion (--no-audit).');
+    }
+
+    // Always assemble the canonical summary; rendering is conditional.
+    const summary = await collectRunSummary({
+      state,
+      pnpm,
+      skipAudit,
+      dryRun,
+      durationMs: Date.now() - startedAt,
+      toolVersion: pkg.version,
+      workspaceName: initial.workspaceName,
+      originalCatalog: initial.originalCatalog,
+      originalOverrides: initial.originalOverrides,
+      initialAdvisories: initial.initialAdvisories,
+      pkgJsonDepChanges,
+    });
+
+    if (options.summary !== false) {
+      renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+    }
+
+    const totalElapsed = formatDuration(Date.now() - startedAt);
+    logger.success(
+      dryRun
+        ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+        : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
+    );
+
+    return summaryToResult(summary);
+  } finally {
+    // Always attempt to restore the user's original `minimumReleaseAge`
+    // setting after pnpm-11 runs, even when an intermediate step throws.
+    if (state.pnpm11TweaksApplied) {
+      state.revertPnpm11WorkspaceTweaks(logger);
+    }
   }
-
-  // Always assemble the canonical summary; rendering is conditional.
-  const summary = await collectRunSummary({
-    state,
-    pnpm,
-    skipAudit,
-    dryRun,
-    durationMs: Date.now() - startedAt,
-    toolVersion: pkg.version,
-    workspaceName: initial.workspaceName,
-    originalCatalog: initial.originalCatalog,
-    originalOverrides: initial.originalOverrides,
-    initialAdvisories: initial.initialAdvisories,
-    pkgJsonDepChanges,
-  });
-
-  if (options.summary !== false) {
-    renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
-  }
-
-  const totalElapsed = formatDuration(Date.now() - startedAt);
-  logger.success(
-    dryRun
-      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
-      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
-  );
-
-  return summaryToResult(summary);
 }
 
 interface PreparedRun {
@@ -237,6 +246,36 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   if (!state.hasWorkspaceYaml) {
     logger.info('No pnpm-workspace.yaml detected — catalog promotion steps will be skipped.');
   }
+
+  // Detect the pnpm version of the *target* workspace. The CLI itself ships
+  // pinned to a specific pnpm version (via its own `packageManager` field),
+  // so `pnpm --version` on PATH reports the *CLI's* pnpm, not the version
+  // that will actually execute commands inside `--path`. Corepack (and any
+  // wrapper that respects `packageManager` / `devEngines.packageManager`)
+  // selects the target's pin instead. We mirror that: read the workspace
+  // package.json first and only fall back to `pnpm --version` when no pin
+  // is declared. Failures degrade gracefully — `pnpmMajor` stays `null`,
+  // which downstream code treats as legacy pnpm 10 behavior.
+  let major: number | null = null;
+  let source = 'unknown';
+  try {
+    major = detectWorkspacePnpmMajor(state.rootPackageJson);
+    if (major !== null) source = 'workspace package.json';
+  } catch {
+    // ignore — fall through to PATH lookup
+  }
+  if (major === null) {
+    try {
+      const versionText = await pnpm.version();
+      major = getPnpmMajor(versionText);
+      source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
+    } catch {
+      // leave major as null
+    }
+  }
+  state.recordPnpmMajor(major);
+  logger.detail(`Target workspace pnpm major: ${major ?? 'unknown'} (from ${source}).`);
+  state.applyPnpm11WorkspaceTweaks(logger);
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }
@@ -468,9 +507,31 @@ async function preAuditCatalogBump(
 
 async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger): Promise<void> {
   logger.step('Apply pnpm audit fixes');
+  // pnpm 11 made `--fix` require an explicit value (`override` or `update`)
+  // and rejects the bare flag with ERR_PNPM_INVALID_FIX_OPTION. We always
+  // want override-based fixes because the whole point of this tool is to
+  // promote those overrides into the catalog (`--fix=update` would patch
+  // the lockfile directly and bypass that pipeline). pnpm 10 still accepts
+  // the bare `--fix`, so it stays the default for older / unknown majors.
+  const auditArgs =
+    (state.pnpmMajor ?? 0) >= 11 ? ['audit', '--fix', 'override'] : ['audit', '--fix'];
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
-  const code = await pnpm.runAllowFail(['audit', '--fix']);
-  logger.detail(`pnpm audit --fix completed with exit code ${code}.`);
+  const code = await pnpm.runAllowFail(auditArgs);
+  logger.detail(`pnpm ${auditArgs.join(' ')} completed with exit code ${code}.`);
+
+  // pnpm 11's `audit --fix` writes `minimumReleaseAgeExclude` entries into
+  // pnpm-workspace.yaml so the patched versions are not blocked by the
+  // global `minimumReleaseAge` gate. Merge those additions into our desired
+  // snapshot before override promotion (which writes a fresh file) so we
+  // don't silently discard the security-exclude list.
+  if (state.hasWorkspaceYaml && (state.pnpmMajor ?? 0) >= 11) {
+    const onDisk = state.readWorkspaceYaml();
+    const merged = mergeMinimumReleaseAgeExclude(state.desiredWorkspaceYaml, onDisk);
+    if (merged !== state.desiredWorkspaceYaml) {
+      logger.detail('Merged `minimumReleaseAgeExclude` entries written by pnpm 11 audit --fix.');
+      state.desiredWorkspaceYaml = merged;
+    }
+  }
 
   // Safety net: promote any catalog-eligible overrides into the catalog.
   state.desiredWorkspaceYaml = syncAuditOverridesIntoCatalog(state, logger);

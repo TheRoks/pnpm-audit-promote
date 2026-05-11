@@ -1,0 +1,4 @@
+minimumReleaseAge: 720
+
+catalog:
+  lodash: '4.17.21'

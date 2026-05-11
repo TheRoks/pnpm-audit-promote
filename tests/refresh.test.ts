@@ -690,4 +690,177 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(result.fixedAdvisories).toEqual([]);
     expect(result.finalAdvisories).toHaveLength(1);
   });
+
+  it("uses bare 'audit --fix' when the target workspace pins pnpm 10", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.33.0' }),
+      'utf8',
+    );
+    // Runner reports pnpm 11 to prove the workspace pin wins over the
+    // CLI's own pnpm version on PATH.
+    const { runner, calls } = makeRecordingRunner({}, { version: '11.0.0' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls).toHaveLength(1);
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
+  });
+
+  it("uses 'audit --fix override' when the target workspace pins pnpm 11", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+    // Runner reports pnpm 10 to prove the workspace pin wins over the
+    // CLI's own pnpm version on PATH.
+    const { runner, calls } = makeRecordingRunner({}, { version: '10.33.0' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls).toHaveLength(1);
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
+  });
+
+  it("uses 'audit --fix override' when the target workspace declares devEngines.packageManager pnpm 11", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({
+        name: 'root',
+        devEngines: { packageManager: { name: 'pnpm', version: '^11.0.0' } },
+      }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner({}, { version: '10.33.0' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
+  });
+
+  it("falls back to runner.version() and uses 'audit --fix override' when workspace has no pnpm pin", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root' }), 'utf8');
+    const { runner, calls } = makeRecordingRunner({}, { version: '11.0.0' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls).toHaveLength(1);
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
+  });
+
+  it("falls back to bare 'audit --fix' when runner.version() is unparseable", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root' }), 'utf8');
+    const { runner, calls } = makeRecordingRunner({}, { version: 'latest' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls).toHaveLength(1);
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
+  });
+
+  it('reverts temporary pnpm 11 minimumReleaseAge tweak when a later step throws', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+
+    const { runner } = makeRecordingRunner();
+    const failingRunner = {
+      ...runner,
+      async run(args: string[]) {
+        if (args[0] === 'install') {
+          throw new Error('install failed');
+        }
+        return runner.run(args);
+      },
+    };
+
+    await expect(
+      refreshDeps({
+        path: tmp,
+        force: true,
+        logger: silentLogger,
+        pnpm: failingRunner,
+        skipAudit: true,
+        skipDedupe: true,
+        summary: false,
+      }),
+    ).rejects.toThrow('install failed');
+
+    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(yamlAfter).not.toContain('minimumReleaseAge: 0');
+    expect(yamlAfter).toBe("catalog:\n  react: '18.2.0'\n");
+  });
 });

@@ -62,7 +62,7 @@ importers:
         version: 0.3.20
       tsdown:
         specifier: ^0.22.0
-        version: 0.22.0(@arethetypeswrong/core@0.18.2)(publint@0.3.20)(tsx@4.21.0)(typescript@6.0.3)
+        version: 0.22.0(@arethetypeswrong/core@0.18.2)(publint@0.3.20)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.3.0)
       tsx:
         specifier: ^4.19.2
         version: 4.21.0
@@ -72,6 +72,9 @@ importers:
       typescript-eslint:
         specifier: ^8.59.1
         version: 8.59.3(eslint@10.3.0)(typescript@6.0.3)
+      unrun:
+        specifier: ^0.3.0
+        version: 0.3.0
       vite:
         specifier: ^8.0.10
         version: 8.0.12(@types/node@25.7.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)
@@ -1383,6 +1386,16 @@ packages:
     resolution: {integrity: sha512-yLSH4py7oFH3oG/9K+XWrz1pSi3dfUrWEnInbxMfArOfc1+33BlGPQtLsOYwvdMy11AwUBetYuaRxSPqgkq+8g==}
     engines: {node: '>=4'}
 
+  unrun@0.3.0:
+    resolution: {integrity: sha512-5xw2AIVS2WR9Lqhz76qDIQLxipKRidf7Nq+Iz5SZ8shk1OmRlxnc6FyI/1Q2m99WLj6cbqaKFdESfWE99KPzlA==}
+    engines: {node: ^22.13.0 || >=24.0.0}
+    hasBin: true
+    peerDependencies:
+      synckit: ^0.11.11
+    peerDependenciesMeta:
+      synckit:
+        optional: true
+
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
@@ -2603,7 +2616,7 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  tsdown@0.22.0(@arethetypeswrong/core@0.18.2)(publint@0.3.20)(tsx@4.21.0)(typescript@6.0.3):
+  tsdown@0.22.0(@arethetypeswrong/core@0.18.2)(publint@0.3.20)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.3.0):
     dependencies:
       ansis: 4.3.0
       cac: 7.0.0
@@ -2625,6 +2638,7 @@ snapshots:
       publint: 0.3.20
       tsx: 4.21.0
       typescript: 6.0.3
+      unrun: 0.3.0
     transitivePeerDependencies:
       - '@ts-macro/tsc'
       - '@typescript/native-preview'
@@ -2668,6 +2682,10 @@ snapshots:
   undici-types@7.21.0: {}
 
   unicode-emoji-modifier-base@1.0.0: {}
+
+  unrun@0.3.0:
+    dependencies:
+      rolldown: 1.0.0
 
   uri-js@4.4.1:
     dependencies:

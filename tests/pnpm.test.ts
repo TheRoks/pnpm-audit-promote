@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../src/logger';
 
@@ -9,6 +10,10 @@ vi.mock('cross-spawn', () => ({
 }));
 
 import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor } from '../src/pnpm';
+
+const EXPLICIT_PNPM_PATH =
+  process.platform === 'win32' ? 'C:\\pnpm\\pnpm.cmd' : '/usr/local/bin/pnpm';
+const TEST_CWD = path.resolve('/tmp/workspace');
 
 function makeLogger(): Logger {
   return {
@@ -82,7 +87,27 @@ describe('createPnpmRunner output gating', () => {
 
   it('does not inherit pnpm output by default', async () => {
     mockExit(0);
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await runner.run(['install']);
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      EXPLICIT_PNPM_PATH,
+      ['install'],
+      expect.objectContaining({ stdio: 'ignore' }),
+    );
+  });
+
+  it('uses global pnpm command when explicit pnpmPath is not provided', async () => {
+    mockExit(0);
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+    });
 
     await runner.run(['install']);
 
@@ -96,15 +121,16 @@ describe('createPnpmRunner output gating', () => {
   it('inherits pnpm output when inheritOutput is enabled', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: makeLogger(),
       inheritOutput: true,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     await runner.run(['install']);
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'pnpm',
+      EXPLICIT_PNPM_PATH,
       ['install'],
       expect.objectContaining({ stdio: 'inherit' }),
     );
@@ -116,7 +142,12 @@ describe('createPnpmRunner output gating', () => {
       ...makeLogger(),
       trace,
     };
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger, dryRun: true });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger,
+      dryRun: true,
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
 
     await runner.run(['dedupe']);
 
@@ -127,9 +158,10 @@ describe('createPnpmRunner output gating', () => {
   it('appends extraArgs to every spawned pnpm invocation', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: makeLogger(),
       extraArgs: ['--ignore-workspace'],
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     await runner.run(['install']);
@@ -139,19 +171,19 @@ describe('createPnpmRunner output gating', () => {
 
     expect(spawnMock).toHaveBeenNthCalledWith(
       1,
-      'pnpm',
+      EXPLICIT_PNPM_PATH,
       ['install', '--ignore-workspace'],
       expect.any(Object),
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       2,
-      'pnpm',
+      EXPLICIT_PNPM_PATH,
       ['dedupe', '--ignore-workspace'],
       expect.any(Object),
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       3,
-      'pnpm',
+      EXPLICIT_PNPM_PATH,
       ['audit', '--json', '--ignore-workspace'],
       expect.any(Object),
     );
@@ -167,12 +199,13 @@ describe('createPnpmRunner output gating', () => {
 
     const detail = vi.fn();
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: {
         ...makeLogger(),
         detail,
       },
       progressIntervalMs: 1000,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     const runPromise = runner.run(['install']);
@@ -195,13 +228,14 @@ describe('createPnpmRunner output gating', () => {
 
     const detail = vi.fn();
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: {
         ...makeLogger(),
         detail,
       },
       inheritOutput: true,
       progressIntervalMs: 1000,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     const runPromise = runner.run(['install']);
@@ -223,12 +257,13 @@ describe('createPnpmRunner output gating', () => {
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const detail = vi.fn();
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: {
         ...makeLogger(),
         detail,
       },
       progressIntervalMs: 1000,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     const runPromise = runner.run(['install']);
@@ -251,13 +286,14 @@ describe('createPnpmRunner output gating', () => {
 
     const detail = vi.fn();
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: {
         ...makeLogger(),
         detail,
       },
       spinner: false,
       progressIntervalMs: 1000,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     const runPromise = runner.run(['install']);
@@ -270,13 +306,21 @@ describe('createPnpmRunner output gating', () => {
 
   it('throws when run receives a non-zero exit code', async () => {
     mockExit(1);
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
     await expect(runner.run(['install'])).rejects.toThrow(/failed with exit code 1/);
   });
 
   it('returns non-zero from runAllowFail', async () => {
     mockExit(2);
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
     await expect(runner.runAllowFail(['audit', '--fix'])).resolves.toBe(2);
   });
 
@@ -291,13 +335,21 @@ describe('createPnpmRunner output gating', () => {
       return child;
     });
 
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
     await expect(runner.run(['install'])).rejects.toThrow(/pnpm is not installed/);
   });
 
   it('capture returns stdout and exit code', async () => {
     spawnMock.mockImplementation(() => makeChildWithStdout(3, '{"ok":true}'));
-    const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
 
     const out = await runner.capture(['audit', '--json']);
     expect(out).toEqual({ stdout: '{"ok":true}', exitCode: 3 });
@@ -306,9 +358,10 @@ describe('createPnpmRunner output gating', () => {
   it('capture supports dry-run mode', async () => {
     const trace = vi.fn();
     const runner = createPnpmRunner({
-      cwd: '/tmp/workspace',
+      cwd: TEST_CWD,
       logger: { ...makeLogger(), trace },
       dryRun: true,
+      pnpmPath: EXPLICIT_PNPM_PATH,
     });
 
     const out = await runner.capture(['audit', '--json']);
@@ -318,12 +371,12 @@ describe('createPnpmRunner output gating', () => {
 
   it('ensurePnpmAvailable resolves on zero exit', async () => {
     mockExit(0);
-    await expect(ensurePnpmAvailable()).resolves.toBeUndefined();
+    await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).resolves.toBeUndefined();
   });
 
   it('ensurePnpmAvailable rejects on non-zero exit', async () => {
     mockExit(1);
-    await expect(ensurePnpmAvailable()).rejects.toThrow(/pnpm is not installed/);
+    await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).rejects.toThrow(/pnpm is not installed/);
   });
 
   it('ensurePnpmAvailable rejects on ENOENT', async () => {
@@ -337,7 +390,13 @@ describe('createPnpmRunner output gating', () => {
       return child;
     });
 
-    await expect(ensurePnpmAvailable()).rejects.toThrow(/pnpm is not installed/);
+    await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).rejects.toThrow(/pnpm is not installed/);
+  });
+
+  it('rejects non-absolute explicit pnpm paths', async () => {
+    expect(() =>
+      createPnpmRunner({ cwd: TEST_CWD, logger: makeLogger(), pnpmPath: 'pnpm' }),
+    ).toThrow(/absolute executable path/);
   });
 });
 

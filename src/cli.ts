@@ -63,15 +63,16 @@ program
     const level: LogLevel = opts.quiet ? 'quiet' : opts.verbose ? 'verbose' : 'normal';
     const logger = createLogger({ level });
     try {
+      const workspacePath = path.resolve(opts.path);
       await refreshDeps({
-        path: path.resolve(opts.path),
+        path: workspacePath,
         force: opts.force || Boolean(opts.yes),
         dryRun: opts.dryRun,
         skipAudit: !opts.audit,
         skipDedupe: !opts.dedupe,
         allowMajor: opts.allowMajor,
         summary: opts.summary,
-        summaryFile: opts.summaryFile,
+        summaryFile: normalizeSummaryFileOption(opts.summaryFile, workspacePath),
         ignoreWorkspace: opts.ignoreWorkspace,
         logger,
       });
@@ -87,3 +88,15 @@ program.parseAsync(process.argv).catch((e: unknown) => {
   console.error(pc.red(`Error: ${msg}`));
   process.exit(1);
 });
+
+function normalizeSummaryFileOption(
+  summaryFile: string | undefined,
+  workspacePath: string,
+): string | undefined {
+  if (summaryFile === undefined) return undefined;
+  const trimmed = summaryFile.trim();
+  if (!trimmed) {
+    throw new Error('Invalid --summary-file value: path cannot be empty.');
+  }
+  return path.isAbsolute(trimmed) ? trimmed : path.resolve(workspacePath, trimmed);
+}

@@ -1,4 +1,5 @@
 import spawn from 'cross-spawn';
+import * as path from 'node:path';
 import { type Logger } from './logger';
 import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors';
 
@@ -53,6 +54,8 @@ export interface PnpmOptions {
    * workspace.
    */
   extraArgs?: readonly string[];
+  /** Optional explicit absolute path to the pnpm executable. */
+  pnpmPath?: string;
 }
 
 export function createPnpmRunner({
@@ -63,7 +66,9 @@ export function createPnpmRunner({
   progressIntervalMs = 20_000,
   dryRun = false,
   extraArgs = [],
+  pnpmPath,
 }: PnpmOptions): PnpmRunner {
+  const executable = resolvePnpmPathOrThrow(pnpmPath);
   const withExtras = (args: string[]): string[] =>
     extraArgs.length > 0 ? [...args, ...extraArgs] : args;
   let cachedVersion: string | undefined;
@@ -98,7 +103,7 @@ export function createPnpmRunner({
         enabled: !inheritOutput,
         spinner,
         progressIntervalMs,
-        execute: () => spawnPnpm(finalArgs, { cwd, inheritOutput }),
+        execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
       });
       if (code !== 0) {
         throw new PnpmCommandFailedError(finalArgs, code);
@@ -114,7 +119,7 @@ export function createPnpmRunner({
         enabled: !inheritOutput,
         spinner,
         progressIntervalMs,
-        execute: () => spawnPnpm(finalArgs, { cwd, inheritOutput }),
+        execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
       });
     },
     async capture(args) {
@@ -124,7 +129,7 @@ export function createPnpmRunner({
         return { stdout: '', exitCode: 0 };
       }
       return new Promise((resolve, reject) => {
-        const child = spawn(PNPM, finalArgs, {
+        const child = spawn(executable, finalArgs, {
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -253,9 +258,13 @@ function toSpinnerLabel(command: string): string {
   return `Running ${shortCommand}`;
 }
 
-function spawnPnpm(args: string[], opts: { cwd: string; inheritOutput: boolean }): Promise<number> {
+function spawnPnpm(
+  executable: string,
+  args: string[],
+  opts: { cwd: string; inheritOutput: boolean },
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(PNPM, args, {
+    const child = spawn(executable, args, {
       cwd: opts.cwd,
       stdio: opts.inheritOutput ? 'inherit' : 'ignore',
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -275,9 +284,10 @@ function spawnPnpm(args: string[], opts: { cwd: string; inheritOutput: boolean }
  * Verify pnpm is on PATH by running `pnpm --version`. Throws if pnpm is
  * missing or fails to launch.
  */
-export async function ensurePnpmAvailable(): Promise<void> {
+export async function ensurePnpmAvailable(pnpmPath?: string): Promise<void> {
+  const executable = resolvePnpmPathOrThrow(pnpmPath);
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(PNPM, ['--version'], { stdio: 'ignore' });
+    const child = spawn(executable, ['--version'], { stdio: 'ignore' });
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         reject(new PnpmNotInstalledError());
@@ -290,4 +300,16 @@ export async function ensurePnpmAvailable(): Promise<void> {
       else reject(new PnpmNotInstalledError());
     });
   });
+}
+
+function resolvePnpmPathOrThrow(pnpmPath: string | undefined): string {
+  const explicit = pnpmPath?.trim();
+  if (explicit) {
+    if (!path.isAbsolute(explicit)) {
+      throw new Error('Invalid pnpm path: expected an absolute executable path.');
+    }
+    return explicit;
+  }
+
+  return PNPM;
 }

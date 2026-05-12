@@ -168,4 +168,31 @@ describe('AST-based catalog writes', () => {
     expect(out).toContain("react: '18.3.1'");
     expect(out).toContain('# pinned for compatibility');
   });
+
+  it('preserves caret prefix on bumped versions', () => {
+    const yaml = "catalog:\n  react: '^18.2.0'\n";
+    const out = applyCatalogUpdates(yaml, new Map([['react', '18.3.1']]));
+    expect(out).toContain("react: '^18.3.1'");
+  });
+
+  it('preserves tilde prefix on bumped versions', () => {
+    const yaml = 'catalog:\n  lodash: ~4.17.20\n';
+    const out = applyCatalogUpdates(yaml, new Map([['lodash', '4.17.21']]));
+    expect(out).toContain('lodash: ~4.17.21');
+  });
+
+  it('leaves bare-pinned versions bare (no prefix injected)', () => {
+    const yaml = 'catalog:\n  lodash: 4.17.20\n';
+    const out = applyCatalogUpdates(yaml, new Map([['lodash', '4.17.21']]));
+    expect(out).toContain('lodash: 4.17.21');
+    expect(out).not.toContain('^4.17.21');
+    expect(out).not.toContain('~4.17.21');
+  });
+
+  it('does not double-prefix when the incoming update already has a prefix', () => {
+    const yaml = "catalog:\n  react: '^18.2.0'\n";
+    const out = applyCatalogUpdates(yaml, new Map([['react', '^19.0.0']]));
+    expect(out).toContain("react: '^19.0.0'");
+    expect(out).not.toContain('^^');
+  });
 });

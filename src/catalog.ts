@@ -131,8 +131,11 @@ export function applyCatalogUpdatesToDoc(doc: Doc, updates: ReadonlyMap<string, 
       const next = updates.get(k);
       if (next === undefined) continue;
       if (isScalar(item.value)) {
-        if (item.value.value !== next) {
-          item.value.value = next;
+        const existing = item.value.value;
+        const existingStr = typeof existing === 'string' ? existing : String(existing ?? '');
+        const nextValue = preserveRangePrefix(existingStr, next);
+        if (existing !== nextValue) {
+          item.value.value = nextValue;
           modified = true;
         }
       } else if (item.value == null) {
@@ -144,6 +147,27 @@ export function applyCatalogUpdatesToDoc(doc: Doc, updates: ReadonlyMap<string, 
     }
   }
   return modified;
+}
+
+/**
+ * Re-apply the leading `^` or `~` range prefix from `existing` to `next` when
+ * `next` is a bare concrete semver. This preserves the existing range style
+ * of a catalog entry across version bumps (e.g. `^1.2.3` bumped to `1.2.4`
+ * is written back as `^1.2.4`, not pinned to `1.2.4`).
+ *
+ * Pass-through cases:
+ * - `next` already starts with a range operator (`^`, `~`, `>`, `<`, `=`).
+ * - `existing` has no recognized `^`/`~` prefix.
+ */
+function preserveRangePrefix(existing: string, next: string): string {
+  if (!next) return next;
+  const first = next[0];
+  if (first === '^' || first === '~' || first === '>' || first === '<' || first === '=') {
+    return next;
+  }
+  const existingPrefix = existing[0];
+  if (existingPrefix !== '^' && existingPrefix !== '~') return next;
+  return `${existingPrefix}${next}`;
 }
 
 /**

@@ -1,5 +1,21 @@
 # pnpm-audit-promote
 
+## [1.6.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.5.0...v1.6.0) (2026-05-12)
+
+
+### Features
+
+* **cli:** normalize summary file path and improve error handling ([#39](https://github.com/TheRoks/pnpm-audit-promote/issues/39)) ([e531bb9](https://github.com/TheRoks/pnpm-audit-promote/commit/e531bb94109bea8b22dd62f53ad4dffdf16c3639))
+* **pnpm:** allow explicit pnpm executable path ([e531bb9](https://github.com/TheRoks/pnpm-audit-promote/commit/e531bb94109bea8b22dd62f53ad4dffdf16c3639))
+* **summary:** enhance summary file writing and validation ([e531bb9](https://github.com/TheRoks/pnpm-audit-promote/commit/e531bb94109bea8b22dd62f53ad4dffdf16c3639))
+* **workspace:** implement single-package mode for audit and cleanup operations ([#37](https://github.com/TheRoks/pnpm-audit-promote/issues/37)) ([39b053e](https://github.com/TheRoks/pnpm-audit-promote/commit/39b053e097a003d551457777c85ea0c8f42867d3))
+
+
+### Bug Fixes
+
+* **catalog:** preserve range prefixes on version bumps in catalog updates ([#40](https://github.com/TheRoks/pnpm-audit-promote/issues/40)) ([21c5358](https://github.com/TheRoks/pnpm-audit-promote/commit/21c53582b68cd96d262c3f99f87716522f8742bb))
+* **render:** sanitize advisory fields to remove control characters ([e531bb9](https://github.com/TheRoks/pnpm-audit-promote/commit/e531bb94109bea8b22dd62f53ad4dffdf16c3639))
+
 ## [1.5.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.4.1...v1.5.0) (2026-05-11)
 
 

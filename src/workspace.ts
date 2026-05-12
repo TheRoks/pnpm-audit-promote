@@ -214,6 +214,31 @@ export class WorkspaceState {
   }
 
   /**
+   * Re-check whether `pnpm-workspace.yaml` exists on disk and update the
+   * `hasWorkspaceYaml` flag accordingly. Useful after pnpm itself may have
+   * created the file mid-run (notably `pnpm 11 audit --fix override`, which
+   * writes its overrides to a new pnpm-workspace.yaml even when one did not
+   * exist before).
+   *
+   * Returns `true` when the flag flipped from `false` to `true`. On that
+   * transition, captures the freshly-written content as both the
+   * `originalWorkspaceYaml` baseline (empty — there was no prior content)
+   * and the `desiredWorkspaceYaml` working snapshot, and re-runs EOL
+   * detection so subsequent writes preserve the file's line endings.
+   */
+  refreshHasWorkspaceYaml(): boolean {
+    if (this.hasWorkspaceYaml) return false;
+    if (!fs.existsSync(this.workspaceYaml)) return false;
+    this.hasWorkspaceYaml = true;
+    this.detectEol();
+    // Keep the original snapshot empty: from this run's perspective, there
+    // was no prior pnpm-workspace.yaml — pnpm created it mid-run.
+    this.originalWorkspaceYaml = '';
+    this.desiredWorkspaceYaml = fs.readFileSync(this.workspaceYaml, 'utf8');
+    return true;
+  }
+
+  /**
    * If pnpm has rewritten pnpm-workspace.yaml since our last snapshot,
    * restore the desired content. Returns true when a restore happened.
    */

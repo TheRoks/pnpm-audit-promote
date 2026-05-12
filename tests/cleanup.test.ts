@@ -37,7 +37,7 @@ function makeState(): WorkspaceState {
 }
 
 describe('cleanup helpers', () => {
-  it('removes lockfile and handles missing lockfile', () => {
+  it('REQ-CORE-001: removes lockfile and handles missing lockfile', () => {
     const state = makeState();
     fs.writeFileSync(state.lockFile, 'x', 'utf8');
     const logs: string[] = [];
@@ -54,7 +54,7 @@ describe('cleanup helpers', () => {
     expect(logs.some((l) => /No pnpm-lock.yaml found/.test(l))).toBe(true);
   });
 
-  it('supports dry-run lockfile removal messaging', () => {
+  it('REQ-CORE-002: supports dry-run lockfile removal messaging', () => {
     const state = makeState();
     state.dryRun = true;
     fs.writeFileSync(state.lockFile, 'x', 'utf8');
@@ -67,7 +67,7 @@ describe('cleanup helpers', () => {
     expect(logs.some((l) => /Dry-run: would remove/.test(l))).toBe(true);
   });
 
-  it('removes node_modules directories and logs a summary', async () => {
+  it('REQ-CORE-001, REQ-PORTABILITY-001, REQ-PORTABILITY-002: removes node_modules directories and logs a summary', async () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web', 'node_modules'), { recursive: true });
 
@@ -84,7 +84,7 @@ describe('cleanup helpers', () => {
     expect(details.some((d) => /Removed 1\/1 node_modules directories/.test(d))).toBe(true);
   });
 
-  it('renders spinner output in TTY detail mode', async () => {
+  it('REQ-LOGGING-006: renders spinner output in TTY detail mode', async () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web', 'node_modules'), { recursive: true });
 
@@ -106,7 +106,7 @@ describe('cleanup helpers', () => {
     expect(writes.some((w) => w.endsWith('\u001b[2K'))).toBe(true);
   });
 
-  it('handles no node_modules directories', async () => {
+  it('REQ-CORE-001: handles no node_modules directories', async () => {
     const state = makeState();
     const lines: string[] = [];
     const logger = createLogger({ out: (l) => lines.push(l), color: false });
@@ -116,7 +116,7 @@ describe('cleanup helpers', () => {
     expect(lines.some((l) => /No node_modules directories found/.test(l))).toBe(true);
   });
 
-  it('strips workspace overrides block when present and keeps file when missing', () => {
+  it('REQ-CORE-001: strips workspace overrides block when present and keeps file when missing', () => {
     const state = makeState();
     const logger = createLogger({ color: false });
 
@@ -129,7 +129,7 @@ describe('cleanup helpers', () => {
     expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(true);
   });
 
-  it('skips workspace overrides cleanup when no pnpm-workspace.yaml is present', () => {
+  it('REQ-WORKSPACE-008: skips workspace overrides cleanup when no pnpm-workspace.yaml is present', () => {
     fs.rmSync(path.join(tmp, 'pnpm-workspace.yaml'), { force: true });
     fs.writeFileSync(
       path.join(tmp, 'package.json'),
@@ -146,7 +146,7 @@ describe('cleanup helpers', () => {
     expect(lines.some((l) => /skipping workspace overrides cleanup/.test(l))).toBe(true);
   });
 
-  it('removes pnpm.overrides from package.json and skips invalid post-edit JSON', () => {
+  it('REQ-CORE-001: removes pnpm.overrides from package.json and skips invalid post-edit JSON', () => {
     const state = makeState();
     fs.mkdirSync(path.join(tmp, 'apps', 'web'), { recursive: true });
     fs.writeFileSync(
@@ -179,6 +179,24 @@ describe('cleanup helpers', () => {
     removePackageJsonOverrides(state, logger);
     expect(parseSpy).toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('REQ-SAFETY-006: refuses to delete a lockfile path that resolves outside the workspace root', () => {
+    const state = makeState();
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pap-cleanup-outside-'));
+    const outsideLock = path.join(outsideDir, 'pnpm-lock.yaml');
+    fs.writeFileSync(outsideLock, 'lockfileVersion: 9.0\n', 'utf8');
+    // Force the state to point at a lockfile outside the workspace root,
+    // simulating a misuse / path-traversal attempt.
+    Object.defineProperty(state, 'lockFile', { value: outsideLock, configurable: true });
+    const logger = createLogger({ color: false });
+
+    try {
+      expect(() => removePnpmLockFile(state, logger)).toThrow(/Refusing to delete/);
+      expect(fs.existsSync(outsideLock)).toBe(true);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -215,13 +233,13 @@ describe('cleanup helpers — single-package mode', () => {
     fs.rmSync(single, { recursive: true, force: true });
   });
 
-  it('detects single-package mode when no workspace.yaml and no workspaces field exist', () => {
+  it('REQ-WORKSPACE-009: detects single-package mode when no workspace.yaml and no workspaces field exist', () => {
     const state = WorkspaceState.initialize(single);
     expect(state.hasWorkspaceYaml).toBe(false);
     expect(state.isMultiPackageWorkspace).toBe(false);
   });
 
-  it('removes only the root node_modules in single-package mode', async () => {
+  it('REQ-WORKSPACE-009: removes only the root node_modules in single-package mode', async () => {
     const state = WorkspaceState.initialize(single);
     const logger = createLogger({ color: false });
 
@@ -231,7 +249,7 @@ describe('cleanup helpers — single-package mode', () => {
     expect(fs.existsSync(path.join(single, 'sub', 'node_modules'))).toBe(true);
   });
 
-  it('strips pnpm.overrides only from the root package.json in single-package mode', () => {
+  it('REQ-WORKSPACE-009: strips pnpm.overrides only from the root package.json in single-package mode', () => {
     const state = WorkspaceState.initialize(single);
     const logger = createLogger({ color: false });
 
@@ -243,7 +261,7 @@ describe('cleanup helpers — single-package mode', () => {
     expect(subPkg).toContain('"overrides"');
   });
 
-  it('treats a non-empty root workspaces array as multi-package', () => {
+  it('REQ-WORKSPACE-009: treats a non-empty root workspaces array as multi-package', () => {
     fs.writeFileSync(
       path.join(single, 'package.json'),
       JSON.stringify(

@@ -16,6 +16,7 @@ import {
 } from './audit/bumpPackageJsonDeps';
 import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
+import { migrateYamlOverridesToPackageJson } from './audit/ignoreWorkspaceMigration';
 import { applyCatalogUpdates } from './catalog';
 import {
   extractAdvisories,
@@ -161,6 +162,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
         allowMajor: options.allowMajor ?? true,
         dryRun,
         preCleanupAuditRaw: initial.preCleanupAuditRaw,
+        ignoreWorkspace: options.ignoreWorkspace ?? false,
       });
     } else {
       logger.detail('Skipped audit and catalog promotion (--no-audit).');
@@ -380,6 +382,7 @@ async function runAuditPhase(
     allowMajor: boolean;
     dryRun: boolean;
     preCleanupAuditRaw: string;
+    ignoreWorkspace: boolean;
   },
 ): Promise<PackageJsonDepChange[]> {
   // Capture a post-cleanup audit JSON and share it with the pre-audit
@@ -399,6 +402,14 @@ async function runAuditPhase(
     opts.preCleanupAuditRaw,
   );
   await auditFix(state, pnpm, progressLogger);
+
+  // Under `--ignore-workspace`, pnpm deliberately ignores pnpm-workspace.yaml,
+  // including any overrides `pnpm audit --fix` just wrote into it. Migrate
+  // those overrides into the root package.json's `pnpm.overrides` so the
+  // subsequent install actually applies them (and the final audit sees them).
+  if (opts.ignoreWorkspace) {
+    migrateYamlOverridesToPackageJson(state, progressLogger);
+  }
 
   await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
     skipDedupe: opts.skipDedupe,
@@ -523,6 +534,14 @@ async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger)
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
   const code = await pnpm.runAllowFail(auditArgs);
   logger.detail(`pnpm ${auditArgs.join(' ')} completed with exit code ${code}.`);
+
+  // pnpm 11's `audit --fix override` writes its overrides into
+  // pnpm-workspace.yaml even when the workspace started without one
+  // (notably under `--ignore-workspace`). Re-detect the file before the
+  // sync/collapse passes so the new content is not silently ignored.
+  if (state.refreshHasWorkspaceYaml()) {
+    logger.detail('Detected pnpm-workspace.yaml created by `pnpm audit --fix`.');
+  }
 
   // pnpm 11's `audit --fix` writes `minimumReleaseAgeExclude` entries into
   // pnpm-workspace.yaml so the patched versions are not blocked by the

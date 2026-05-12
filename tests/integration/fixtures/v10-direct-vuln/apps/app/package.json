@@ -1,0 +1,8 @@
+{
+  "name": "v10-direct-vuln-app",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "lodash": "catalog:"
+  }
+}

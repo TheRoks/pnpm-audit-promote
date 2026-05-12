@@ -42,9 +42,8 @@ program
   .option('--no-audit', 'Skip the pnpm audit and catalog promotion phase')
   .option('--no-dedupe', 'Skip pnpm dedupe calls')
   .option(
-    '--allow-major',
-    'Allow catalog bumps that cross a major version boundary (still logged as warnings). Use --no-allow-major to skip them.',
-    true,
+    '--no-allow-major',
+    'Refuse catalog bumps that cross a major version boundary; leave the vulnerability for override handling. (Default is to allow them with a warning.)',
   )
   .option('--no-summary', 'Suppress the Markdown PR summary printed at the end of the run.')
   .option('--summary-file <path>', 'Also write the Markdown PR summary to the given file path.')

@@ -27,55 +27,55 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('extractVersionPrefix', () => {
-  it('returns empty prefix for bare semver', () => {
+  it('REQ-AUDIT-005: returns empty prefix for bare semver', () => {
     expect(extractVersionPrefix('1.2.3')).toEqual({ prefix: '', bare: '1.2.3' });
   });
 
-  it('returns ^ prefix', () => {
+  it('REQ-AUDIT-005: returns ^ prefix', () => {
     expect(extractVersionPrefix('^2.0.0')).toEqual({ prefix: '^', bare: '2.0.0' });
   });
 
-  it('returns ~ prefix', () => {
+  it('REQ-AUDIT-005: returns ~ prefix', () => {
     expect(extractVersionPrefix('~3.4.5')).toEqual({ prefix: '~', bare: '3.4.5' });
   });
 
-  it('returns null for catalog: specifier', () => {
+  it('REQ-AUDIT-006: returns null for catalog: specifier', () => {
     expect(extractVersionPrefix('catalog:default')).toBeNull();
   });
 
-  it('returns null for workspace: specifier', () => {
+  it('REQ-AUDIT-006: returns null for workspace: specifier', () => {
     expect(extractVersionPrefix('workspace:*')).toBeNull();
   });
 
-  it('returns null for complex range with >=', () => {
+  it('REQ-AUDIT-006: returns null for complex range with >=', () => {
     expect(extractVersionPrefix('>=1.0.0 <2.0.0')).toBeNull();
   });
 
-  it('returns null for range with *', () => {
+  it('REQ-AUDIT-006: returns null for range with *', () => {
     expect(extractVersionPrefix('*')).toBeNull();
   });
 
-  it('returns null for x-range', () => {
+  it('REQ-AUDIT-006: returns null for x-range', () => {
     expect(extractVersionPrefix('1.x')).toBeNull();
   });
 
-  it('returns null for || union', () => {
+  it('REQ-AUDIT-006: returns null for || union', () => {
     expect(extractVersionPrefix('1.0.0 || 2.0.0')).toBeNull();
   });
 
-  it('returns null for http URL', () => {
+  it('REQ-AUDIT-006: returns null for http URL', () => {
     expect(extractVersionPrefix('https://example.com/pkg.tgz')).toBeNull();
   });
 
-  it('returns null for file: specifier', () => {
+  it('REQ-AUDIT-006: returns null for file: specifier', () => {
     expect(extractVersionPrefix('file:../local-pkg')).toBeNull();
   });
 
-  it('returns null for empty string', () => {
+  it('REQ-AUDIT-006: returns null for empty string', () => {
     expect(extractVersionPrefix('')).toBeNull();
   });
 
-  it('returns null for undefined', () => {
+  it('REQ-AUDIT-006: returns null for undefined', () => {
     expect(extractVersionPrefix(undefined)).toBeNull();
   });
 });
@@ -119,7 +119,7 @@ function makeVersionsJson(versions: string[]): string {
 // ---------------------------------------------------------------------------
 
 describe('getDirectDepPackageJsonBumps', () => {
-  it('returns empty array when no advisories', async () => {
+  it('REQ-AUDIT-005: returns empty array when no advisories', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -131,7 +131,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('returns empty array when audit stdout is empty', async () => {
+  it('REQ-AUDIT-008: returns empty array when audit stdout is empty', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -141,7 +141,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips deps that use catalog: syntax (resolved by catalog bump instead)', async () => {
+  it('REQ-AUDIT-006: skips deps that use catalog: syntax (resolved by catalog bump instead)', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       // react uses catalog: syntax; lodash uses explicit version
@@ -160,7 +160,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('bumps explicit version even when the same package is also in the catalog', async () => {
+  it('REQ-AUDIT-005: bumps explicit version even when the same package is also in the catalog', async () => {
     // Root uses an explicit version for react (not catalog: syntax), even though
     // react is catalog-managed. The explicit entry must be bumped directly.
     const state = writeWorkspace(
@@ -176,7 +176,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]).toMatchObject({ name: 'react', before: '18.2.0', after: '18.3.0' });
   });
 
-  it('bumps bare version and preserves no prefix', async () => {
+  it('REQ-AUDIT-005: bumps bare version and preserves no prefix', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -195,7 +195,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     });
   });
 
-  it('bumps ^-prefixed version and preserves ^ prefix', async () => {
+  it('REQ-AUDIT-005: bumps ^-prefixed version and preserves ^ prefix', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
@@ -209,7 +209,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]).toMatchObject({ before: '^4.17.20', after: '^4.17.21', tier: 'patch' });
   });
 
-  it('bumps ~-prefixed version and preserves ~ prefix', async () => {
+  it('REQ-AUDIT-005: bumps ~-prefixed version and preserves ~ prefix', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', devDependencies: { axios: '~1.6.0' } }, null, 2),
@@ -223,7 +223,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]).toMatchObject({ before: '~1.6.0', after: '~1.7.0' });
   });
 
-  it('skips catalog: version field', async () => {
+  it('REQ-AUDIT-006: skips catalog: version field', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: 'catalog:' } }, null, 2),
@@ -235,7 +235,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips workspace: version field', async () => {
+  it('REQ-AUDIT-006: skips workspace: version field', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { 'my-pkg': 'workspace:*' } }, null, 2),
@@ -247,7 +247,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips complex range version field', async () => {
+  it('REQ-AUDIT-006: skips complex range version field', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { axios: '>=1.0.0 <2.0.0' } }, null, 2),
@@ -259,7 +259,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips version already outside the vulnerable range', async () => {
+  it('REQ-AUDIT-007: skips version already outside the vulnerable range', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.21' } }, null, 2),
@@ -272,7 +272,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips major bump when allowMajor=false and logs warning', async () => {
+  it('REQ-AUDIT-002: skips major bump when allowMajor=false and logs warning', async () => {
     const warnings: string[] = [];
     const logger = {
       ...silentLogger,
@@ -296,7 +296,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(warnings.some((w) => w.includes('MAJOR'))).toBe(true);
   });
 
-  it('emits MAJOR bump when allowMajor=true (default)', async () => {
+  it('REQ-AUDIT-003: emits MAJOR bump when allowMajor=true (default)', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { express: '4.21.2' } }, null, 2),
@@ -310,7 +310,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]).toMatchObject({ name: 'express', after: '5.0.0', tier: 'major' });
   });
 
-  it('uses pre-fetched auditJsonStdout to avoid second audit call', async () => {
+  it('REQ-AUDIT-008: uses pre-fetched auditJsonStdout to avoid second audit call', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -324,7 +324,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(calls.every((c) => c.args[0] !== 'audit')).toBe(true);
   });
 
-  it('scans devDependencies and optionalDependencies', async () => {
+  it('REQ-AUDIT-005: scans devDependencies and optionalDependencies', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify(
@@ -360,7 +360,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(names).toEqual(['fsevents', 'jest']);
   });
 
-  it('only bumps the vulnerable package across multiple workspace packages', async () => {
+  it('REQ-WORKSPACE-009: only bumps the vulnerable package across multiple workspace packages', async () => {
     // Set up a child package.
     const pkgDir = path.join(tmp, 'packages', 'app');
     fs.mkdirSync(pkgDir, { recursive: true });
@@ -386,7 +386,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]!.pkgJsonPath).toBe(path.join(tmp, 'package.json'));
   });
 
-  it('bumps both root and child workspace packages when both have a vulnerable dep', async () => {
+  it('REQ-WORKSPACE-009, REQ-AUDIT-005: bumps both root and child workspace packages when both have a vulnerable dep', async () => {
     const pkgDir = path.join(tmp, 'packages', 'app');
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.writeFileSync(
@@ -416,7 +416,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     }
   });
 
-  it('skips ranged dep (^) when advisory severity is moderate', async () => {
+  it('REQ-AUDIT-007: skips ranged dep (^) when advisory severity is moderate', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
@@ -429,7 +429,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('skips ranged dep (~) when advisory severity is low', async () => {
+  it('REQ-AUDIT-007: skips ranged dep (~) when advisory severity is low', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '~4.17.20' } }, null, 2),
@@ -442,7 +442,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps).toHaveLength(0);
   });
 
-  it('bumps ranged dep (^) when advisory severity is critical', async () => {
+  it('REQ-AUDIT-005: bumps ranged dep (^) when advisory severity is critical', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
@@ -456,7 +456,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]?.after).toBe('^4.17.21');
   });
 
-  it('bumps exact-pinned dep for moderate severity (no prefix = not filtered)', async () => {
+  it('REQ-AUDIT-005: bumps exact-pinned dep for moderate severity (no prefix = not filtered)', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -470,7 +470,7 @@ describe('getDirectDepPackageJsonBumps', () => {
     expect(bumps[0]?.after).toBe('4.17.21');
   });
 
-  it('deduplicates when multiple advisories affect the same dep, keeping highest safe version', async () => {
+  it('REQ-AUDIT-001: deduplicates when multiple advisories affect the same dep, keeping highest safe version', async () => {
     const state = writeWorkspace(
       MINIMAL_WORKSPACE_YAML,
       JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
@@ -503,7 +503,7 @@ describe('getDirectDepPackageJsonBumps', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyPackageJsonDepBumps', () => {
-  it('writes bumped version to package.json', () => {
+  it('REQ-AUDIT-005: writes bumped version to package.json', () => {
     const pkgJsonPath = path.join(tmp, 'package.json');
     const original = JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2);
     fs.writeFileSync(pkgJsonPath, original, 'utf8');
@@ -524,7 +524,7 @@ describe('applyPackageJsonDepBumps', () => {
     expect(result.dependencies['lodash']).toBe('4.17.21');
   });
 
-  it('preserves ^ prefix in written value', () => {
+  it('REQ-AUDIT-005: preserves ^ prefix in written value', () => {
     const pkgJsonPath = path.join(tmp, 'package.json');
     fs.writeFileSync(
       pkgJsonPath,
@@ -548,7 +548,7 @@ describe('applyPackageJsonDepBumps', () => {
     expect(result.dependencies['lodash']).toBe('^4.17.21');
   });
 
-  it('does not write when dryRun=true', () => {
+  it('REQ-CORE-002: does not write when dryRun=true', () => {
     const pkgJsonPath = path.join(tmp, 'package.json');
     const original = JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2);
     fs.writeFileSync(pkgJsonPath, original, 'utf8');
@@ -566,7 +566,7 @@ describe('applyPackageJsonDepBumps', () => {
     expect(fs.readFileSync(pkgJsonPath, 'utf8')).toBe(original);
   });
 
-  it('applies multiple bumps to the same file in one pass', () => {
+  it('REQ-AUDIT-005: applies multiple bumps to the same file in one pass', () => {
     const pkgJsonPath = path.join(tmp, 'package.json');
     fs.writeFileSync(
       pkgJsonPath,
@@ -605,7 +605,7 @@ describe('applyPackageJsonDepBumps', () => {
     expect(result.dependencies['axios']).toBe('~1.7.0');
   });
 
-  it('applies bumps across different files', () => {
+  it('REQ-AUDIT-005: applies bumps across different files', () => {
     const pkgA = path.join(tmp, 'a.json');
     const pkgB = path.join(tmp, 'b.json');
     fs.writeFileSync(
@@ -655,7 +655,7 @@ describe('applyPackageJsonDepBumps', () => {
 // ---------------------------------------------------------------------------
 
 describe('getDirectDepPackageJsonBumps — single-package mode', () => {
-  it('only inspects the root package.json when no workspace is configured', async () => {
+  it('REQ-WORKSPACE-009: only inspects the root package.json when no workspace is configured', async () => {
     // Root package.json — pnpm-managed, no pnpm-workspace.yaml, no workspaces field.
     fs.writeFileSync(
       path.join(tmp, 'package.json'),

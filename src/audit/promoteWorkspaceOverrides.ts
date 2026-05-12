@@ -25,10 +25,17 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
   if (!doc) return current;
 
   const overridesNode = doc.get('overrides', true);
-  const catalogNode = doc.get('catalog', true);
-  if (!isMap(overridesNode) || !isMap(catalogNode)) return current;
+  if (!isMap(overridesNode)) return current;
 
-  const { names: catalogNames, versions: catalogVersions } = readCatalog(current);
+  // A missing `catalog:` block disables promotions but still allows the
+  // collapse pass to consolidate redundant qualified overrides (which is
+  // useful when pnpm 11 writes many open-ended selectors for the same
+  // package via `pnpm audit --fix override`).
+  const catalogNode = doc.get('catalog', true);
+  const hasCatalog = isMap(catalogNode);
+  const { names: catalogNames, versions: catalogVersions } = hasCatalog
+    ? readCatalog(current)
+    : { names: new Set<string>(), versions: new Map<string, string>() };
   const updates = new Map<string, string>();
   const keepItems: Pair[] = [];
 

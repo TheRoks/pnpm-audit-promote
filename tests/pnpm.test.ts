@@ -85,7 +85,7 @@ describe('createPnpmRunner output gating', () => {
     });
   });
 
-  it('does not inherit pnpm output by default', async () => {
+  it('REQ-RUNNER-001: does not inherit pnpm output by default', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -102,7 +102,7 @@ describe('createPnpmRunner output gating', () => {
     );
   });
 
-  it('uses global pnpm command when explicit pnpmPath is not provided', async () => {
+  it('REQ-RUNNER-001: uses global pnpm command when explicit pnpmPath is not provided', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -118,7 +118,7 @@ describe('createPnpmRunner output gating', () => {
     );
   });
 
-  it('inherits pnpm output when inheritOutput is enabled', async () => {
+  it('REQ-LOGGING-004: inherits pnpm output when inheritOutput is enabled', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -136,7 +136,7 @@ describe('createPnpmRunner output gating', () => {
     );
   });
 
-  it('does not spawn pnpm in dry-run mode', async () => {
+  it('REQ-CORE-002: does not spawn pnpm in dry-run mode', async () => {
     const trace = vi.fn();
     const logger: Logger = {
       ...makeLogger(),
@@ -155,7 +155,7 @@ describe('createPnpmRunner output gating', () => {
     expect(trace).toHaveBeenCalledWith('(dry-run) pnpm dedupe');
   });
 
-  it('appends extraArgs to every spawned pnpm invocation', async () => {
+  it('REQ-PNPM11-008: appends extraArgs to every spawned pnpm invocation', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -189,7 +189,7 @@ describe('createPnpmRunner output gating', () => {
     );
   });
 
-  it('emits heartbeat progress messages when output is hidden', async () => {
+  it('REQ-LOGGING-006: emits heartbeat progress messages when output is hidden', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       value: false,
@@ -218,7 +218,7 @@ describe('createPnpmRunner output gating', () => {
     expect(detail).toHaveBeenCalledWith('Completed pnpm install.');
   });
 
-  it('suppresses heartbeat progress messages when inheriting output', async () => {
+  it('REQ-LOGGING-006: suppresses heartbeat progress messages when inheriting output', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       value: false,
@@ -246,7 +246,7 @@ describe('createPnpmRunner output gating', () => {
     expect(detail).not.toHaveBeenCalled();
   });
 
-  it('renders a single-line spinner in TTY mode when enabled', async () => {
+  it('REQ-LOGGING-006: renders a single-line spinner in TTY mode when enabled', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       value: true,
@@ -276,7 +276,7 @@ describe('createPnpmRunner output gating', () => {
     writeSpy.mockRestore();
   });
 
-  it('can disable spinner and keep heartbeat details in TTY mode', async () => {
+  it('REQ-LOGGING-006: can disable spinner and keep heartbeat details in TTY mode', async () => {
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       value: true,
@@ -304,7 +304,7 @@ describe('createPnpmRunner output gating', () => {
     expect(detail).toHaveBeenCalledWith('Still running pnpm install...');
   });
 
-  it('throws when run receives a non-zero exit code', async () => {
+  it('REQ-RUNNER-002: throws when run receives a non-zero exit code', async () => {
     mockExit(1);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -314,7 +314,7 @@ describe('createPnpmRunner output gating', () => {
     await expect(runner.run(['install'])).rejects.toThrow(/failed with exit code 1/);
   });
 
-  it('returns non-zero from runAllowFail', async () => {
+  it('REQ-RUNNER-003: returns non-zero from runAllowFail', async () => {
     mockExit(2);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -324,7 +324,7 @@ describe('createPnpmRunner output gating', () => {
     await expect(runner.runAllowFail(['audit', '--fix'])).resolves.toBe(2);
   });
 
-  it('maps ENOENT spawn errors to a friendly message', async () => {
+  it('REQ-RUNNER-005: maps ENOENT spawn errors to a friendly message', async () => {
     spawnMock.mockImplementation(() => {
       const child = new EventEmitter();
       queueMicrotask(() => {
@@ -343,7 +343,7 @@ describe('createPnpmRunner output gating', () => {
     await expect(runner.run(['install'])).rejects.toThrow(/pnpm is not installed/);
   });
 
-  it('capture returns stdout and exit code', async () => {
+  it('REQ-RUNNER-004: capture returns stdout and exit code', async () => {
     spawnMock.mockImplementation(() => makeChildWithStdout(3, '{"ok":true}'));
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -355,7 +355,7 @@ describe('createPnpmRunner output gating', () => {
     expect(out).toEqual({ stdout: '{"ok":true}', exitCode: 3 });
   });
 
-  it('capture supports dry-run mode', async () => {
+  it('REQ-CORE-002: capture supports dry-run mode', async () => {
     const trace = vi.fn();
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -369,17 +369,17 @@ describe('createPnpmRunner output gating', () => {
     expect(trace).toHaveBeenCalledWith('(dry-run) pnpm audit --json (capture)');
   });
 
-  it('ensurePnpmAvailable resolves on zero exit', async () => {
+  it('REQ-RUNNER-005: ensurePnpmAvailable resolves on zero exit', async () => {
     mockExit(0);
     await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).resolves.toBeUndefined();
   });
 
-  it('ensurePnpmAvailable rejects on non-zero exit', async () => {
+  it('REQ-RUNNER-005: ensurePnpmAvailable rejects on non-zero exit', async () => {
     mockExit(1);
     await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).rejects.toThrow(/pnpm is not installed/);
   });
 
-  it('ensurePnpmAvailable rejects on ENOENT', async () => {
+  it('REQ-RUNNER-005: ensurePnpmAvailable rejects on ENOENT', async () => {
     spawnMock.mockImplementation(() => {
       const child = new EventEmitter();
       queueMicrotask(() => {
@@ -393,7 +393,7 @@ describe('createPnpmRunner output gating', () => {
     await expect(ensurePnpmAvailable(EXPLICIT_PNPM_PATH)).rejects.toThrow(/pnpm is not installed/);
   });
 
-  it('rejects non-absolute explicit pnpm paths', async () => {
+  it('REQ-RUNNER-001: rejects non-absolute explicit pnpm paths', async () => {
     expect(() =>
       createPnpmRunner({ cwd: TEST_CWD, logger: makeLogger(), pnpmPath: 'pnpm' }),
     ).toThrow(/absolute executable path/);
@@ -401,7 +401,7 @@ describe('createPnpmRunner output gating', () => {
 });
 
 describe('getPnpmMajor', () => {
-  it('parses major numbers from common pnpm version strings', () => {
+  it('REQ-RUNNER-006: parses major numbers from common pnpm version strings', () => {
     expect(getPnpmMajor('10.33.0')).toBe(10);
     expect(getPnpmMajor('11.0.0')).toBe(11);
     expect(getPnpmMajor('11.0.0-rc.1')).toBe(11);
@@ -409,7 +409,7 @@ describe('getPnpmMajor', () => {
     expect(getPnpmMajor('  10.33.0\n')).toBe(10);
   });
 
-  it('returns null for unparseable input', () => {
+  it('REQ-RUNNER-006: returns null for unparseable input', () => {
     expect(getPnpmMajor('')).toBeNull();
     expect(getPnpmMajor('not a version')).toBeNull();
     expect(getPnpmMajor('latest')).toBeNull();
@@ -421,7 +421,7 @@ describe('PnpmRunner version()', () => {
     spawnMock.mockReset();
   });
 
-  it('caches the result of `pnpm --version`', async () => {
+  it('REQ-RUNNER-006: caches the result of `pnpm --version`', async () => {
     spawnMock.mockImplementationOnce(() => makeChildWithStdout(0, '11.0.0\n'));
     const runner = createPnpmRunner({ cwd: '/tmp/workspace', logger: makeLogger() });
     expect(await runner.version()).toBe('11.0.0');
@@ -434,7 +434,7 @@ describe('PnpmRunner version()', () => {
     );
   });
 
-  it('returns an empty string in dry-run mode', async () => {
+  it('REQ-CORE-002: returns an empty string in dry-run mode', async () => {
     const runner = createPnpmRunner({
       cwd: '/tmp/workspace',
       logger: makeLogger(),
@@ -444,7 +444,7 @@ describe('PnpmRunner version()', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('returns an empty string when pnpm fails to launch', async () => {
+  it('REQ-RUNNER-005: returns an empty string when pnpm fails to launch', async () => {
     spawnMock.mockImplementationOnce(() => {
       const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter };
       child.stdout = new EventEmitter();

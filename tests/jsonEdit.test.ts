@@ -38,7 +38,7 @@ describe('findMatchingBrace', () => {
 });
 
 describe('removeJsonProperty', () => {
-  it('removes a string property in the middle', () => {
+  it('REQ-PORTABILITY-003: removes a string property in the middle', () => {
     const before = '{\n  "a": "1",\n  "b": "2",\n  "c": "3"\n}';
     const out = removeJsonProperty(before, 'b');
     expect(JSON.parse(out)).toEqual({ a: '1', c: '3' });
@@ -81,7 +81,7 @@ describe('removeJsonProperty', () => {
     expect(out.endsWith('\n')).toBe(true);
   });
 
-  it('preserves trailing newline when removing a top-level property', () => {
+  it('REQ-PORTABILITY-003: preserves trailing newline when removing a top-level property', () => {
     const before = '{\n  "a": 1,\n  "b": 2\n}\n';
     const out = removeJsonProperty(before, 'a');
     expect(out.endsWith('\n')).toBe(true);

@@ -181,3 +181,85 @@ describe('cleanup helpers', () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe('cleanup helpers — single-package mode', () => {
+  let single: string;
+
+  beforeEach(() => {
+    single = fs.mkdtempSync(path.join(os.tmpdir(), 'pap-cleanup-single-'));
+    fs.writeFileSync(
+      path.join(single, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'app',
+          packageManager: 'pnpm@10.8.0',
+          pnpm: { overrides: { react: '18.3.1' } },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    // Nested unrelated project that must NOT be touched.
+    fs.mkdirSync(path.join(single, 'sub', 'node_modules'), { recursive: true });
+    fs.writeFileSync(
+      path.join(single, 'sub', 'package.json'),
+      JSON.stringify({ name: 'sub', pnpm: { overrides: { react: '18.0.0' } } }, null, 2),
+      'utf8',
+    );
+    // Root-level node_modules that SHOULD be removed.
+    fs.mkdirSync(path.join(single, 'node_modules'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(single, { recursive: true, force: true });
+  });
+
+  it('detects single-package mode when no workspace.yaml and no workspaces field exist', () => {
+    const state = WorkspaceState.initialize(single);
+    expect(state.hasWorkspaceYaml).toBe(false);
+    expect(state.isMultiPackageWorkspace).toBe(false);
+  });
+
+  it('removes only the root node_modules in single-package mode', async () => {
+    const state = WorkspaceState.initialize(single);
+    const logger = createLogger({ color: false });
+
+    await removeNodeModulesFolders(state, logger);
+
+    expect(fs.existsSync(path.join(single, 'node_modules'))).toBe(false);
+    expect(fs.existsSync(path.join(single, 'sub', 'node_modules'))).toBe(true);
+  });
+
+  it('strips pnpm.overrides only from the root package.json in single-package mode', () => {
+    const state = WorkspaceState.initialize(single);
+    const logger = createLogger({ color: false });
+
+    removePackageJsonOverrides(state, logger);
+
+    const rootPkg = fs.readFileSync(path.join(single, 'package.json'), 'utf8');
+    expect(rootPkg).not.toContain('"overrides"');
+    const subPkg = fs.readFileSync(path.join(single, 'sub', 'package.json'), 'utf8');
+    expect(subPkg).toContain('"overrides"');
+  });
+
+  it('treats a non-empty root workspaces array as multi-package', () => {
+    fs.writeFileSync(
+      path.join(single, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'app',
+          packageManager: 'pnpm@10.8.0',
+          workspaces: ['sub'],
+          pnpm: { overrides: { react: '18.3.1' } },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const state = WorkspaceState.initialize(single);
+    expect(state.isMultiPackageWorkspace).toBe(true);
+  });
+});

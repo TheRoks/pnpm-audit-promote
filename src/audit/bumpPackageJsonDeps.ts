@@ -261,6 +261,12 @@ interface DepLocation {
 }
 
 function collectPackageJsonPaths(state: WorkspaceState): string[] {
+  if (!state.isMultiPackageWorkspace) {
+    // Single-package mode: confine the audit-driven scan to the workspace
+    // root. `WorkspaceState.initialize` guarantees the root package.json
+    // exists when we get here.
+    return [state.rootPackageJson];
+  }
   const packageDirs = resolveWorkspacePackageDirs(state);
   return findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
     (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),

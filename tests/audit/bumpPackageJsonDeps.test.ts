@@ -649,3 +649,45 @@ describe('applyPackageJsonDepBumps', () => {
     ).toBe('1.7.0');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Single-package mode: scan must be confined to root package.json
+// ---------------------------------------------------------------------------
+
+describe('getDirectDepPackageJsonBumps — single-package mode', () => {
+  it('only inspects the root package.json when no workspace is configured', async () => {
+    // Root package.json — pnpm-managed, no pnpm-workspace.yaml, no workspaces field.
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'app',
+          packageManager: 'pnpm@10.8.0',
+          dependencies: { lodash: '4.17.20' },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    // Nested unrelated package that owns the same vulnerable dep — must be ignored.
+    fs.mkdirSync(path.join(tmp, 'sub'));
+    fs.writeFileSync(
+      path.join(tmp, 'sub', 'package.json'),
+      JSON.stringify({ name: 'sub', dependencies: { lodash: '4.17.20' } }, null, 2),
+      'utf8',
+    );
+
+    const state = WorkspaceState.initialize(tmp);
+    expect(state.isMultiPackageWorkspace).toBe(false);
+
+    const { runner } = makeRecordingRunner({
+      'audit --json': makeAuditJson('lodash', '<=4.17.20', '>=4.17.21'),
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger);
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.pkgJsonPath).toBe(path.join(tmp, 'package.json'));
+  });
+});

@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe('findNodeModulesFolders', () => {
-  it('finds node_modules while pruning generated directories', () => {
+  it('REQ-WORKSPACE-009: finds node_modules while pruning generated directories', () => {
     fs.mkdirSync(path.join(tmp, 'app', 'node_modules'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'packages', 'a', 'node_modules'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'dist', 'node_modules'), { recursive: true }); // pruned parent
@@ -27,7 +27,7 @@ describe('findNodeModulesFolders', () => {
     expect(found).toEqual(['app/node_modules', 'packages/a/node_modules']);
   });
 
-  it('returns empty list when root cannot be read', () => {
+  it('REQ-WORKSPACE-009: returns empty list when root cannot be read', () => {
     const missing = path.join(tmp, 'does-not-exist');
     const found = findNodeModulesFolders(missing);
     expect(found).toEqual([]);
@@ -35,7 +35,7 @@ describe('findNodeModulesFolders', () => {
 });
 
 describe('findWorkspaceFiles', () => {
-  it('finds matching files while pruning generated directories', () => {
+  it('REQ-WORKSPACE-009: finds matching files while pruning generated directories', () => {
     fs.mkdirSync(path.join(tmp, 'apps', 'web'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'coverage', 'x'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'package.json'), '{}', 'utf8');
@@ -49,7 +49,7 @@ describe('findWorkspaceFiles', () => {
     expect(found).toEqual(['apps/web/package.json', 'package.json']);
   });
 
-  it('returns empty list when root cannot be read', () => {
+  it('REQ-WORKSPACE-009: returns empty list when root cannot be read', () => {
     const missing = path.join(tmp, 'missing-root');
     const found = findWorkspaceFiles(missing, 'package.json');
     expect(found).toEqual([]);

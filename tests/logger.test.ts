@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createLogger } from '../src/logger';
 
 describe('createLogger verbosity behavior', () => {
-  it('suppresses trace output at normal level', () => {
+  it('REQ-LOGGING-003: suppresses trace output at normal level', () => {
     const out: string[] = [];
     const err: string[] = [];
     const logger = createLogger({
@@ -25,7 +25,7 @@ describe('createLogger verbosity behavior', () => {
     expect(logger.isVerbose()).toBe(false);
   });
 
-  it('emits trace output at verbose level', () => {
+  it('REQ-LOGGING-004: emits trace output at verbose level', () => {
     const out: string[] = [];
     const logger = createLogger({ level: 'verbose', out: (line) => out.push(line), color: false });
 
@@ -35,7 +35,7 @@ describe('createLogger verbosity behavior', () => {
     expect(logger.isVerbose()).toBe(true);
   });
 
-  it('suppresses normal output at quiet level but keeps warnings/info/success', () => {
+  it('REQ-LOGGING-002: suppresses normal output at quiet level but keeps warnings/info/success', () => {
     const out: string[] = [];
     const err: string[] = [];
     const logger = createLogger({
@@ -60,7 +60,7 @@ describe('createLogger verbosity behavior', () => {
     expect(logger.showsDetails()).toBe(false);
   });
 
-  it('suppresses all output at silent level', () => {
+  it('REQ-LOGGING-001: suppresses all output at silent level', () => {
     const out: string[] = [];
     const err: string[] = [];
     const logger = createLogger({

@@ -9,13 +9,14 @@ import {
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
 } from './cleanup';
-import { getDirectDepCatalogBumps } from './audit/parseAdvisories';
+import { getDirectDepCatalogBumps, extractMinimumPatchedVersions } from './audit/parseAdvisories';
 import {
   applyPackageJsonDepBumps,
   getDirectDepPackageJsonBumps,
 } from './audit/bumpPackageJsonDeps';
 import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
+import { migrateYamlOverridesToPackageJson } from './audit/ignoreWorkspaceMigration';
 import { applyCatalogUpdates } from './catalog';
 import {
   extractAdvisories,
@@ -38,6 +39,22 @@ import type {
 import { createProgressLogger } from './progress';
 import { defaultConfirmDestructive, type ConfirmFn } from './prompt';
 import pkg from '../package.json' with { type: 'json' };
+
+/**
+ * Args passed to every `pnpm install` invocation triggered by this tool.
+ *
+ * `--no-frozen-lockfile` is always required because:
+ *   1. The tool intentionally mutates `pnpm-workspace.yaml` (catalog and
+ *      overrides) between installs, so the lockfile *must* be allowed to
+ *      drift to absorb those changes.
+ *   2. pnpm 10/11 enable `--frozen-lockfile` by default whenever the `CI`
+ *      environment variable is set. Without this flag, the install that
+ *      follows a catalog bump fails with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`
+ *      on every CI runner.
+ *   3. Outside CI, `--no-frozen-lockfile` is the default behaviour, so
+ *      passing it explicitly is a no-op there.
+ */
+const INSTALL_ARGS: readonly string[] = ['install', '--no-frozen-lockfile'];
 
 export interface RefreshOptions {
   /** Workspace root containing pnpm-workspace.yaml. */
@@ -138,68 +155,71 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   const ctx = await prepareRun(options);
   const { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt } = ctx;
 
-  try {
-    const confirm = options.confirm ?? defaultConfirmDestructive;
-    if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
-      logger.info('Operation canceled by user.');
-      return canceledResult(Date.now() - startedAt);
-    }
-
-    const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
-
-    await runCleanupPhase(state, progressLogger);
-
-    await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
-      skipDedupe: Boolean(options.skipDedupe),
-      installLabel: 'Install dependencies',
-    });
-
-    let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-    if (!skipAudit) {
-      pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
-        skipDedupe: Boolean(options.skipDedupe),
-        allowMajor: options.allowMajor ?? true,
-        dryRun,
-        preCleanupAuditRaw: initial.preCleanupAuditRaw,
-      });
-    } else {
-      logger.detail('Skipped audit and catalog promotion (--no-audit).');
-    }
-
-    // Always assemble the canonical summary; rendering is conditional.
-    const summary = await collectRunSummary({
-      state,
-      pnpm,
-      skipAudit,
-      dryRun,
-      durationMs: Date.now() - startedAt,
-      toolVersion: pkg.version,
-      workspaceName: initial.workspaceName,
-      originalCatalog: initial.originalCatalog,
-      originalOverrides: initial.originalOverrides,
-      initialAdvisories: initial.initialAdvisories,
-      pkgJsonDepChanges,
-    });
-
-    if (options.summary !== false) {
-      renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
-    }
-
-    const totalElapsed = formatDuration(Date.now() - startedAt);
-    logger.success(
-      dryRun
-        ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
-        : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
-    );
-
-    return summaryToResult(summary);
-  } finally {
-    // Always attempt to restore the user's original `minimumReleaseAge`
-    // setting after pnpm-11 runs, even when an intermediate step throws.
-    if (state.pnpm11TweaksApplied) {
-      state.revertPnpm11WorkspaceTweaks(logger);
-    }
+  const confirm = options.confirm ?? defaultConfirmDestructive;
+  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
+    logger.info('Operation canceled by user.');
+    return canceledResult(Date.now() - startedAt);
   }
+
+  const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
+
+  // pnpm 11 enforces a global `minimumReleaseAge` gate that, by default,
+  // rejects packages published <24h ago — including the very patches
+  // `pnpm audit --fix` would install. Pre-seed only the *specific*
+  // advisory-fix versions into `minimumReleaseAgeExclude` so the gate
+  // continues to protect every other package (REQ-PNPM11-009/010).
+  if (!dryRun && (state.pnpmMajor ?? 0) >= 11 && initial.preCleanupAuditRaw) {
+    const entries = extractMinimumPatchedVersions(initial.preCleanupAuditRaw);
+    state.seedMinimumReleaseAgeExcludes(entries, logger);
+  }
+
+  await runCleanupPhase(state, progressLogger);
+
+  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
+    skipDedupe: Boolean(options.skipDedupe),
+    installLabel: 'Install dependencies',
+  });
+
+  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+  if (!skipAudit) {
+    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+      skipDedupe: Boolean(options.skipDedupe),
+      allowMajor: options.allowMajor ?? true,
+      dryRun,
+      preCleanupAuditRaw: initial.preCleanupAuditRaw,
+      ignoreWorkspace: options.ignoreWorkspace ?? false,
+    });
+  } else {
+    logger.detail('Skipped audit and catalog promotion (--no-audit).');
+  }
+
+  // Always assemble the canonical summary; rendering is conditional.
+  const summary = await collectRunSummary({
+    state,
+    pnpm,
+    skipAudit,
+    dryRun,
+    durationMs: Date.now() - startedAt,
+    toolVersion: pkg.version,
+    workspaceName: initial.workspaceName,
+    originalCatalog: initial.originalCatalog,
+    originalOverrides: initial.originalOverrides,
+    initialAdvisories: initial.initialAdvisories,
+    pkgJsonDepChanges,
+  });
+
+  if (options.summary !== false) {
+    renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+  }
+
+  const totalElapsed = formatDuration(Date.now() - startedAt);
+  logger.success(
+    dryRun
+      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
+  );
+
+  return summaryToResult(summary);
 }
 
 interface PreparedRun {
@@ -280,7 +300,6 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   }
   state.recordPnpmMajor(major);
   logger.detail(`Target workspace pnpm major: ${major ?? 'unknown'} (from ${source}).`);
-  state.applyPnpm11WorkspaceTweaks(logger);
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }
@@ -360,7 +379,7 @@ async function runInstallAndDedupe(
   opts: { skipDedupe: boolean; installLabel: string },
 ): Promise<void> {
   progressLogger.step(opts.installLabel);
-  await runAndRestore(pnpm, state, logger, ['install']);
+  await runAndRestore(pnpm, state, logger, [...INSTALL_ARGS]);
 
   progressLogger.step('Deduplicate dependency graph');
   if (!opts.skipDedupe) {
@@ -380,6 +399,7 @@ async function runAuditPhase(
     allowMajor: boolean;
     dryRun: boolean;
     preCleanupAuditRaw: string;
+    ignoreWorkspace: boolean;
   },
 ): Promise<PackageJsonDepChange[]> {
   // Capture a post-cleanup audit JSON and share it with the pre-audit
@@ -399,6 +419,14 @@ async function runAuditPhase(
     opts.preCleanupAuditRaw,
   );
   await auditFix(state, pnpm, progressLogger);
+
+  // Under `--ignore-workspace`, pnpm deliberately ignores pnpm-workspace.yaml,
+  // including any overrides `pnpm audit --fix` just wrote into it. Migrate
+  // those overrides into the root package.json's `pnpm.overrides` so the
+  // subsequent install actually applies them (and the final audit sees them).
+  if (opts.ignoreWorkspace) {
+    migrateYamlOverridesToPackageJson(state, progressLogger);
+  }
 
   await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
     skipDedupe: opts.skipDedupe,
@@ -443,7 +471,7 @@ async function runAndRestore(
 ): Promise<void> {
   await pnpm.run(args);
   if (state.restoreWorkspaceYaml(logger)) {
-    await pnpm.run(['install']);
+    await pnpm.run([...INSTALL_ARGS]);
   }
 }
 
@@ -498,7 +526,7 @@ async function preAuditCatalogBump(
     applyPackageJsonDepBumps(pkgJsonBumps, state.dryRun);
   }
 
-  await runAndRestore(pnpm, state, logger, ['install']);
+  await runAndRestore(pnpm, state, logger, [...INSTALL_ARGS]);
 
   // Convert PackageJsonDepBump[] → PackageJsonDepChange[] for the summary.
   return pkgJsonBumps.map((b) => ({
@@ -523,6 +551,14 @@ async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger)
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
   const code = await pnpm.runAllowFail(auditArgs);
   logger.detail(`pnpm ${auditArgs.join(' ')} completed with exit code ${code}.`);
+
+  // pnpm 11's `audit --fix override` writes its overrides into
+  // pnpm-workspace.yaml even when the workspace started without one
+  // (notably under `--ignore-workspace`). Re-detect the file before the
+  // sync/collapse passes so the new content is not silently ignored.
+  if (state.refreshHasWorkspaceYaml()) {
+    logger.detail('Detected pnpm-workspace.yaml created by `pnpm audit --fix`.');
+  }
 
   // pnpm 11's `audit --fix` writes `minimumReleaseAgeExclude` entries into
   // pnpm-workspace.yaml so the patched versions are not blocked by the

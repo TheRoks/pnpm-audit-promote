@@ -56,7 +56,7 @@ function makeSummary(overrides: Partial<RunSummaryData> = {}): RunSummaryData {
 }
 
 describe('renderRunSummary summary file writes', () => {
-  it('writes summary file for valid in-workspace path', () => {
+  it('REQ-SUMMARY-003: writes summary file for valid in-workspace path', () => {
     const summaryPath = path.join(tmp, 'reports', 'run-summary.txt');
     fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
 
@@ -71,7 +71,7 @@ describe('renderRunSummary summary file writes', () => {
     expect(detail).toHaveBeenCalledWith(`Wrote run summary to ${summaryPath}.`);
   });
 
-  it('rejects path traversal outside workspace root', () => {
+  it('REQ-SUMMARY-004: rejects path traversal outside workspace root', () => {
     const outside = path.resolve(tmp, '..', 'outside-summary.txt');
     const warn = vi.fn();
 
@@ -86,7 +86,7 @@ describe('renderRunSummary summary file writes', () => {
     expect(String(warn.mock.calls[0]?.[0] ?? '')).toContain('outside workspace root');
   });
 
-  it('rejects directory targets', () => {
+  it('REQ-SUMMARY-004: rejects directory targets', () => {
     const warn = vi.fn();
 
     renderRunSummary(makeSummary(), {
@@ -99,7 +99,7 @@ describe('renderRunSummary summary file writes', () => {
     expect(String(warn.mock.calls[0]?.[0] ?? '')).toContain('points to a directory');
   });
 
-  it('does not write summary file during dry-run', () => {
+  it('REQ-SUMMARY-005: does not write summary file during dry-run', () => {
     const summaryPath = path.join(tmp, 'dry-run-summary.txt');
 
     renderRunSummary(makeSummary(), {
@@ -111,7 +111,7 @@ describe('renderRunSummary summary file writes', () => {
     expect(fs.existsSync(summaryPath)).toBe(false);
   });
 
-  it('warns and continues when summary path is invalid', () => {
+  it('REQ-SUMMARY-007: warns and continues when summary path is invalid', () => {
     const outside = path.resolve(tmp, '..', 'invalid-summary.txt');
     const warn = vi.fn();
 

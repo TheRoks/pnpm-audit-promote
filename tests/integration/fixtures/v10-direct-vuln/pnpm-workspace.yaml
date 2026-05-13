@@ -1,0 +1,8 @@
+# Reserved for the parent package — pnpm requires a workspace yaml or
+# packages array entry. Catalog deliberately pins lodash 4.17.20 (vulnerable)
+# so the audit pass should bump it to 4.17.21+ in the catalog.
+packages:
+  - 'apps/*'
+
+catalog:
+  lodash: '4.17.20'

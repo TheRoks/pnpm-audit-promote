@@ -5,9 +5,14 @@
  *  - `minimumReleaseAge` defaults to `1440` (24 hours), blocking upgrades to
  *    packages that were published less than a day ago. This makes
  *    `pnpm audit --fix` unable to promote a freshly-published patch release.
+ *    We *do not* zero this gate — see REQ-PNPM11-010. Instead,
+ *    {@link addMinimumReleaseAgeExcludeEntries} pre-seeds only the specific
+ *    advisory-fix versions into `minimumReleaseAgeExclude`, leaving the
+ *    global gate intact for every other package (REQ-PNPM11-009).
  *  - `pnpm audit --fix` itself writes `minimumReleaseAgeExclude` entries into
  *    `pnpm-workspace.yaml`, which the existing `restoreWorkspaceYaml` flow
- *    would clobber if it blindly wrote back the pre-run snapshot.
+ *    would clobber if it blindly wrote back the pre-run snapshot. See
+ *    {@link mergeMinimumReleaseAgeExclude} for the reconciliation step.
  *
  * The helpers in this module are intentionally regex-based so they preserve
  * the YAML byte-for-byte outside the keys they explicitly target — matching
@@ -58,44 +63,6 @@ export function getTopLevelScalar(yaml: string, key: string): string | null {
 export function hasTopLevelKey(yaml: string, key: string): boolean {
   if (!yaml) return false;
   return topLevelKeyRegex(key).test(yaml);
-}
-
-/**
- * Ensure `minimumReleaseAge: 0` is set at the top level of the workspace
- * yaml. When the key already exists as a scalar it is replaced; otherwise a
- * new line is appended. The result preserves the dominant EOL.
- *
- * Only invoked for pnpm 11+ runs — earlier versions ignore the setting and
- * therefore do not need to be perturbed.
- */
-export function forceMinimumReleaseAgeZero(yaml: string): string {
-  const eol = detectEol(yaml);
-  const re = /^minimumReleaseAge[ \t]*:[ \t]*([^\r\n]*)$/m;
-  if (re.test(yaml)) {
-    return yaml.replace(re, 'minimumReleaseAge: 0');
-  }
-  if (yaml.length === 0) return `minimumReleaseAge: 0${eol}`;
-  const needsLeadingEol = !yaml.endsWith('\n');
-  return `${yaml}${needsLeadingEol ? eol : ''}minimumReleaseAge: 0${eol}`;
-}
-
-/**
- * Restore the user's original `minimumReleaseAge` value in `yaml`. When the
- * original input had no `minimumReleaseAge` key, the line is removed
- * entirely. When it had a scalar value, that value is written back. When the
- * key originally referred to a block (which we never inject), the original
- * is left untouched at the call site — this helper only operates on scalar
- * forms.
- */
-export function restoreMinimumReleaseAge(yaml: string, originalScalarValue: string | null): string {
-  const re = /^minimumReleaseAge[ \t]*:[ \t]*([^\r\n]*)(\r?\n|$)/m;
-  const match = re.exec(yaml);
-  if (!match) return yaml;
-  if (originalScalarValue === null) {
-    // Strip the injected line entirely.
-    return yaml.slice(0, match.index) + yaml.slice(match.index + match[0].length);
-  }
-  return yaml.replace(re, `minimumReleaseAge: ${originalScalarValue}$2`);
 }
 
 /**
@@ -208,4 +175,43 @@ function parseExcludeEntries(blockBody: string): Map<string, string> {
     map.set(m[2]!, line);
   }
   return map;
+}
+
+/**
+ * Merge a `name -> version` map into the top-level
+ * `minimumReleaseAgeExclude` block of `yaml`. Existing entries in `yaml`
+ * are preserved; entries in `additions` override on key collision.
+ *
+ * When the block is missing, it is appended. When `additions` is empty,
+ * `yaml` is returned unchanged.
+ *
+ * Used to pre-seed advisory-fix versions before `pnpm audit --fix override`
+ * so pnpm 11's release-age gate does not reject freshly-published patches,
+ * without disturbing the user\u2019s global `minimumReleaseAge` setting.
+ */
+export function addMinimumReleaseAgeExcludeEntries(
+  yaml: string,
+  additions: ReadonlyMap<string, string>,
+): string {
+  if (additions.size === 0) return yaml;
+  const eol = detectEol(yaml || '');
+  const range = locateMinimumReleaseAgeExcludeBlock(yaml);
+
+  if (!range) {
+    const lines = [...additions]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, version]) => `  ${name}: ${version}`)
+      .join(eol);
+    const trailingEol = yaml.length === 0 || yaml.endsWith('\n') ? '' : eol;
+    return `${yaml}${trailingEol}minimumReleaseAgeExclude:${eol}${lines}${eol}`;
+  }
+
+  const existing = parseExcludeEntries(range.body);
+  const merged = new Map<string, string>(existing);
+  for (const [name, version] of additions) {
+    merged.set(name, `  ${name}: ${version}`);
+  }
+  const mergedLines = Array.from(merged.values()).join(eol);
+  const newBlock = `minimumReleaseAgeExclude:${eol}${mergedLines}${eol}`;
+  return yaml.slice(0, range.start) + newBlock + yaml.slice(range.end);
 }

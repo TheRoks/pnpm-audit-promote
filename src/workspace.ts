@@ -5,12 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError } from './errors';
-import {
-  forceMinimumReleaseAgeZero,
-  getTopLevelScalar,
-  hasTopLevelKey,
-  restoreMinimumReleaseAge,
-} from './workspaceYamlPnpm11';
+import { addMinimumReleaseAgeExcludeEntries } from './workspaceYamlPnpm11';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -57,30 +52,16 @@ export class WorkspaceState {
    * Major version of the pnpm binary on PATH (10, 11, ...). `null` when
    * detection failed or has not been performed yet. Set once via
    * {@link recordPnpmMajor} during `prepareRun`. pnpm 11 triggers
-   * extra workspace-yaml handling (see {@link applyPnpm11WorkspaceTweaks}).
+   * extra workspace-yaml handling (see {@link seedMinimumReleaseAgeExcludes}).
    */
   pnpmMajor: number | null = null;
 
   /**
-   * Truly-original pnpm-workspace.yaml content as written by the user. Unlike
-   * `desiredWorkspaceYaml` this is never patched with the pnpm-11 working
-   * copy modifications (e.g. forced `minimumReleaseAge: 0`). Used to restore
-   * the user's exact configuration at the end of the run.
+   * Truly-original pnpm-workspace.yaml content as written by the user.
+   * Preserved for diagnostics and for restoring the exact user-intended
+   * configuration where reformatting is undesirable.
    */
   originalWorkspaceYaml = '';
-
-  /**
-   * Captured original value of the top-level `minimumReleaseAge` scalar, or
-   * `null` when the user had no such key. Used to undo the temporary
-   * `minimumReleaseAge: 0` injection at the end of a pnpm-11 run.
-   */
-  originalMinimumReleaseAge: string | null = null;
-
-  /**
-   * True when {@link applyPnpm11WorkspaceTweaks} injected `minimumReleaseAge: 0`
-   * for the duration of the run. Drives the matching cleanup step.
-   */
-  pnpm11TweaksApplied = false;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
@@ -131,66 +112,34 @@ export class WorkspaceState {
   }
 
   /**
-   * pnpm 11 ships several defaults that interfere with audit-driven catalog
-   * promotion. Most notably, `minimumReleaseAge` defaults to 1440 (1 day),
-   * which blocks `pnpm audit --fix` from picking up freshly-published patch
-   * releases. This method installs a working copy of `pnpm-workspace.yaml`
-   * with `minimumReleaseAge: 0` for the duration of the run; the original
-   * value is restored by {@link revertPnpm11WorkspaceTweaks}.
+   * Pre-seed pnpm 11's `minimumReleaseAgeExclude` block in
+   * `pnpm-workspace.yaml` with the `name: minimumPatchedVersion` entries
+   * passed in. This unblocks `pnpm audit --fix override` (and the
+   * subsequent install) from rejecting freshly-published patched versions
+   * without disturbing the user’s global `minimumReleaseAge` setting —
+   * the supply-chain gate continues to apply to every *other* package.
    *
-   * No-op when pnpm major is not 11+, when no `pnpm-workspace.yaml` exists,
-   * or when the workspace state is in dry-run mode (writes are suppressed).
+   * No-op when pnpm major is not 11+, when no `pnpm-workspace.yaml`
+   * exists, when `entries` is empty, or when the workspace state is in
+   * dry-run mode (writes are suppressed).
+   *
+   * Per REQ-PNPM11-010, this method never touches the top-level
+   * `minimumReleaseAge` value.
    */
-  applyPnpm11WorkspaceTweaks(logger: Logger): void {
-    if (this.pnpm11TweaksApplied) return;
+  seedMinimumReleaseAgeExcludes(entries: ReadonlyMap<string, string>, logger: Logger): void {
+    if (entries.size === 0) return;
     if (this.pnpmMajor === null || this.pnpmMajor < 11) return;
     if (!this.hasWorkspaceYaml) return;
-    // Capture the user-intended value (if any) and patch the working copy.
-    this.originalMinimumReleaseAge = getTopLevelScalar(
-      this.originalWorkspaceYaml,
-      'minimumReleaseAge',
-    );
-    // Only proceed when the original is a plain scalar (or absent). If the
-    // key exists as a block mapping, leave it alone — pnpm rejects scalar
-    // forms in that shape and we don't want to corrupt the file.
-    if (
-      this.originalMinimumReleaseAge === null &&
-      hasTopLevelKey(this.originalWorkspaceYaml, 'minimumReleaseAge')
-    ) {
-      logger.detail('Detected `minimumReleaseAge` as a block — leaving pnpm 11 defaults in place.');
-      return;
-    }
-    this.desiredWorkspaceYaml = forceMinimumReleaseAgeZero(this.desiredWorkspaceYaml);
-    this.saveWorkspaceYaml(this.desiredWorkspaceYaml);
-    this.pnpm11TweaksApplied = true;
+    const next = addMinimumReleaseAgeExcludeEntries(this.desiredWorkspaceYaml, entries);
+    if (next === this.desiredWorkspaceYaml) return;
+    this.desiredWorkspaceYaml = next;
+    this.saveWorkspaceYaml(next);
+    const names = [...entries.keys()].sort();
     logger.detail(
-      this.originalMinimumReleaseAge === null
-        ? 'pnpm 11 detected: temporarily set `minimumReleaseAge: 0` for this run.'
-        : `pnpm 11 detected: temporarily overrode \`minimumReleaseAge\` (was ${this.originalMinimumReleaseAge}) for this run.`,
+      `Pre-seeded ${entries.size} \`minimumReleaseAgeExclude\` entr${
+        entries.size === 1 ? 'y' : 'ies'
+      } for advisory fixes: ${names.join(', ')}.`,
     );
-  }
-
-  /**
-   * Undo {@link applyPnpm11WorkspaceTweaks}. Restores the user's original
-   * `minimumReleaseAge` value in the on-disk file (or removes the injected
-   * line entirely when the user had no such key). Safe to call when no
-   * tweaks were applied.
-   */
-  revertPnpm11WorkspaceTweaks(logger: Logger): void {
-    if (!this.pnpm11TweaksApplied) return;
-    if (!this.hasWorkspaceYaml) return;
-    const current = this.readWorkspaceYaml();
-    const restored = restoreMinimumReleaseAge(current, this.originalMinimumReleaseAge);
-    if (restored !== current) {
-      this.desiredWorkspaceYaml = restored;
-      this.saveWorkspaceYaml(restored);
-      logger.detail(
-        this.originalMinimumReleaseAge === null
-          ? 'Reverted temporary `minimumReleaseAge: 0` override.'
-          : `Restored original \`minimumReleaseAge: ${this.originalMinimumReleaseAge}\`.`,
-      );
-    }
-    this.pnpm11TweaksApplied = false;
   }
 
   detectEol(): void {
@@ -211,6 +160,31 @@ export class WorkspaceState {
     if (this.dryRun) return;
     if (!this.hasWorkspaceYaml) return;
     fs.writeFileSync(this.workspaceYaml, content, 'utf8');
+  }
+
+  /**
+   * Re-check whether `pnpm-workspace.yaml` exists on disk and update the
+   * `hasWorkspaceYaml` flag accordingly. Useful after pnpm itself may have
+   * created the file mid-run (notably `pnpm 11 audit --fix override`, which
+   * writes its overrides to a new pnpm-workspace.yaml even when one did not
+   * exist before).
+   *
+   * Returns `true` when the flag flipped from `false` to `true`. On that
+   * transition, captures the freshly-written content as both the
+   * `originalWorkspaceYaml` baseline (empty — there was no prior content)
+   * and the `desiredWorkspaceYaml` working snapshot, and re-runs EOL
+   * detection so subsequent writes preserve the file's line endings.
+   */
+  refreshHasWorkspaceYaml(): boolean {
+    if (this.hasWorkspaceYaml) return false;
+    if (!fs.existsSync(this.workspaceYaml)) return false;
+    this.hasWorkspaceYaml = true;
+    this.detectEol();
+    // Keep the original snapshot empty: from this run's perspective, there
+    // was no prior pnpm-workspace.yaml — pnpm created it mid-run.
+    this.originalWorkspaceYaml = '';
+    this.desiredWorkspaceYaml = fs.readFileSync(this.workspaceYaml, 'utf8');
+    return true;
   }
 
   /**

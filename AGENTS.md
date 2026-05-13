@@ -69,8 +69,19 @@ helper modules. `PnpmRunner` is injectable so tests never shell out to real pnpm
 - Temp dirs are cleaned up in `afterEach` with `fs.rmSync(tmp, { recursive: true })`
 - Inject `silentLogger` when constructing `WorkspaceState` in tests
 - Inject a mock `PnpmRunner` via `options.pnpm` to avoid shelling out
-- Coverage thresholds: 85% statements/lines, 75% branches, 90% functions
-  (`src/cli.ts`, `src/index.ts` are excluded)
+- Coverage thresholds: 90% statements, 78% branches, 95% functions, 93% lines
+  (`src/cli.ts`, `src/index.ts`, `src/summary.ts` are excluded)
+- **Requirement IDs**: every `it()` / `test()` title SHALL be prefixed with
+  one or more `REQ-AREA-NNN` IDs from [REQUIREMENTS.md](./REQUIREMENTS.md).
+  Run `pnpm traceability` to regenerate `docs/traceability.md` and
+  `pnpm traceability:strict` to fail on unbound requirements (CI gate).
+- **Integration tests** live under `tests/integration/` and are gated by
+  `RUN_INTEGRATION=1`. Run them with `pnpm test:integration`. They drive a
+  real pnpm binary (10 or 11) against deterministic vulnerable fixtures.
+- **CLI e2e tests** live under `tests/cli/` and spawn the built
+  `dist/cli.js`. They auto-build if `dist/` is missing.
+- **Property-based tests** (fast-check) live in `tests/*.property.test.ts`
+  and complement example-based tests with algebraic-law coverage.
 
 ## Contributing
 

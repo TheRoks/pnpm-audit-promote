@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('refreshDeps integration (mocked pnpm)', () => {
-  it('rejects destructive execution in non-interactive mode without --force', async () => {
+  it('REQ-SAFETY-002: rejects destructive execution in non-interactive mode without --force', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -43,7 +43,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     }
   });
 
-  it('completes happy path with skipAudit and skipDedupe', async () => {
+  it('REQ-CORE-001, REQ-CORE-005, REQ-CORE-006, REQ-CORE-007, REQ-RUNNER-007: completes happy path with skipAudit and skipDedupe', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n",
@@ -71,9 +71,13 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // exactly one pnpm install call when audit + dedupe skipped
     const installs = calls.filter((c) => c.args[0] === 'install');
     expect(installs).toHaveLength(1);
+    // REQ-CORE-007: every install must use --no-frozen-lockfile so that
+    // CI runs (which default pnpm to --frozen-lockfile) don't reject installs
+    // that follow the tool's own catalog/override mutations.
+    expect(installs[0]!.args).toEqual(['install', '--no-frozen-lockfile']);
   });
 
-  it('runs without a pnpm-workspace.yaml when package.json declares pnpm', async () => {
+  it('REQ-WORKSPACE-008: runs without a pnpm-workspace.yaml when package.json declares pnpm', async () => {
     fs.writeFileSync(
       path.join(tmp, 'package.json'),
       JSON.stringify(
@@ -113,7 +117,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(pj.pnpm).toBeUndefined();
   });
 
-  it('throws EnclosingWorkspaceError when a parent workspace is detected', async () => {
+  it('REQ-WORKSPACE-007: throws EnclosingWorkspaceError when a parent workspace is detected', async () => {
     const sub = path.join(tmp, 'examples', 'angular');
     fs.mkdirSync(sub, { recursive: true });
     fs.writeFileSync(
@@ -141,7 +145,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     ).rejects.toThrow(/enclosing pnpm workspace/i);
   });
 
-  it('honors ignoreWorkspace and proceeds despite an enclosing workspace', async () => {
+  it('REQ-WORKSPACE-007, REQ-PNPM11-008: honors ignoreWorkspace and proceeds despite an enclosing workspace', async () => {
     const sub = path.join(tmp, 'examples', 'angular');
     fs.mkdirSync(sub, { recursive: true });
     fs.writeFileSync(
@@ -181,7 +185,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(pj.pnpm).toBeUndefined();
   });
 
-  it('dry-run does not delete the lockfile or invoke pnpm', async () => {
+  it('REQ-CORE-002: dry-run does not delete the lockfile or invoke pnpm', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -202,7 +206,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(fs.existsSync(path.join(tmp, 'pnpm-lock.yaml'))).toBe(true);
   });
 
-  it('reports numbered progress steps including cleanup phase', async () => {
+  it('REQ-LOGGING-006: reports numbered progress steps including cleanup phase', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -234,7 +238,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(steps).toContain('Step 6/6 — Deduplicate dependency graph');
   });
 
-  it('promotes direct-dep audit findings into catalog', async () => {
+  it('REQ-AUDIT-001, REQ-OVERRIDES-001: promotes direct-dep audit findings into catalog', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
@@ -266,7 +270,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).toContain("react: '18.3.1'");
   });
 
-  it('prefers patch over minor when both satisfy the advisory', async () => {
+  it('REQ-AUDIT-001: prefers patch over minor when both satisfy the advisory', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
@@ -298,7 +302,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).toContain("react: '18.2.1'");
   });
 
-  it('bumps catalog entries for packages that are deps of child workspace packages (not root)', async () => {
+  it('REQ-AUDIT-001: bumps catalog entries for packages that are deps of child workspace packages (not root)', async () => {
     // Regression: the old `isDirect` check required the audit finding path to
     // start with `.`, so packages like `vite` that appeared as
     // `apps/web > vite` were skipped, and pnpm audit --fix would then write
@@ -345,7 +349,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).not.toContain('7.');
   });
 
-  it('uses the patched version for the matching vulnerable range, not another range', async () => {
+  it('REQ-AUDIT-001, REQ-AUDIT-007: uses the patched version for the matching vulnerable range, not another range', async () => {
     const yaml = "catalog:\n  vite: '6.3.5'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
@@ -385,7 +389,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).not.toContain('7.3.2');
   });
 
-  it('warns and bumps to major when only a major satisfies', async () => {
+  it('REQ-AUDIT-003: warns and bumps to major when only a major satisfies', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
@@ -426,7 +430,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(warnings.some((w) => /Major version bump required for react/.test(w))).toBe(true);
   });
 
-  it('skips a major bump when allowMajor is false', async () => {
+  it('REQ-AUDIT-002: skips a major bump when allowMajor is false', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
     fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
@@ -468,7 +472,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(warnings.some((w) => /--no-allow-major/.test(w) || /--allow-major/.test(w))).toBe(true);
   });
 
-  it('does not strip pnpm.overrides from package.json excluded by workspace config', async () => {
+  it('REQ-WORKSPACE-009: does not strip pnpm.overrides from package.json excluded by workspace config', async () => {
     // packages: only includes storybook/*, explicitly excludes examples/*
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
@@ -522,7 +526,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(excludedResult).toContain('"overrides"');
   });
 
-  it('honors an injected confirm() that returns false (canceled result)', async () => {
+  it('REQ-SAFETY-004, REQ-SAFETY-005: honors an injected confirm() that returns false (canceled result)', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -547,7 +551,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('returns RefreshResult with catalog diff data on success', async () => {
+  it('REQ-CORE-004: returns RefreshResult with catalog diff data on success', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -573,7 +577,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(Array.isArray(result.fixedAdvisories)).toBe(true);
   });
 
-  it('raises the declared floor for ranged deps whose installed version is safe but minimum is not', async () => {
+  it('REQ-AUDIT-005: raises the declared floor for ranged deps whose installed version is safe but minimum is not', async () => {
     // Scenario: package.json has `"lodash": "^4.17.20"`.
     // The pre-cleanup locked version is 4.17.20 (vulnerable <=4.17.20).
     // After cleanup + fresh install, pnpm resolves to 4.17.21 (latest in
@@ -640,7 +644,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(result.dependencies['lodash']).toBe('^4.17.21');
   });
 
-  it('returns a populated summary and accurate fixedAdvisories even when summary: false', async () => {
+  it('REQ-SUMMARY-002, REQ-SUMMARY-006: returns a populated summary and accurate fixedAdvisories even when summary: false', async () => {
     // Regression: previously the `summary: false` branch passed an empty
     // `finalAdvisories: []` to `diffAdvisories`, so every initial advisory
     // was incorrectly reported as fixed and `result.summary` was null.
@@ -691,7 +695,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(result.finalAdvisories).toHaveLength(1);
   });
 
-  it("uses bare 'audit --fix' when the target workspace pins pnpm 10", async () => {
+  it("REQ-PNPM10-001: uses bare 'audit --fix' when the target workspace pins pnpm 10", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -720,7 +724,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
   });
 
-  it("uses 'audit --fix override' when the target workspace pins pnpm 11", async () => {
+  it("REQ-PNPM11-001: uses 'audit --fix override' when the target workspace pins pnpm 11", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -749,7 +753,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
   });
 
-  it("uses 'audit --fix override' when the target workspace declares devEngines.packageManager pnpm 11", async () => {
+  it("REQ-PNPM11-001, REQ-PNPM11-005, REQ-WORKSPACE-004: uses 'audit --fix override' when the target workspace declares devEngines.packageManager pnpm 11", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -778,7 +782,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
   });
 
-  it("falls back to runner.version() and uses 'audit --fix override' when workspace has no pnpm pin", async () => {
+  it("REQ-PNPM11-001: falls back to runner.version() and uses 'audit --fix override' when workspace has no pnpm pin", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -801,7 +805,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
   });
 
-  it("falls back to bare 'audit --fix' when runner.version() is unparseable", async () => {
+  it("REQ-PNPM10-001: falls back to bare 'audit --fix' when runner.version() is unparseable", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -824,7 +828,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
   });
 
-  it('reverts temporary pnpm 11 minimumReleaseAge tweak when a later step throws', async () => {
+  it('REQ-PNPM11-010: never injects `minimumReleaseAge: 0` even when a later step throws', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -862,5 +866,71 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(yamlAfter).not.toContain('minimumReleaseAge: 0');
     expect(yamlAfter).toBe("catalog:\n  react: '18.2.0'\n");
+  });
+
+  it('REQ-PNPM11-009: pre-seeds minimumReleaseAgeExclude entries from the initial audit on pnpm 11', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "minimumReleaseAge: 720\ncatalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
+      },
+    });
+    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(yamlAfter).toContain('minimumReleaseAgeExclude:');
+    expect(yamlAfter).toContain('  lodash: 4.17.21');
+    // REQ-PNPM11-010: the user's global gate is preserved verbatim.
+    expect(yamlAfter).toContain('minimumReleaseAge: 720');
+    expect(yamlAfter).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
+  });
+
+  it('REQ-PNPM11-009: does not seed minimumReleaseAgeExclude on pnpm 10', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
+      },
+    });
+    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(yamlAfter).not.toContain('minimumReleaseAgeExclude');
   });
 });

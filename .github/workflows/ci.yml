@@ -27,6 +27,9 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run test
       - run: pnpm run build
+      - name: Requirements traceability
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        run: pnpm run traceability:strict
       - name: publint
         if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         run: pnpm run check:exports
@@ -65,3 +68,33 @@ jobs:
             echo 'temporary minimumReleaseAge override leaked into final workspace yaml'
             exit 1
           fi
+
+  # Real-pnpm integration tests under tests/integration/. Gated by
+  # RUN_INTEGRATION=1 (see scripts/run-integration.mjs). Uses fixtures with
+  # a pinned-vulnerable lodash@4.17.20 to exercise the full audit + promote
+  # flow against pnpm 10 and pnpm 11. Path-filtered to source / integration
+  # changes so PRs touching only docs don't pay the install cost.
+  integration:
+    name: Integration (pnpm ${{ matrix.pnpm-major }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pnpm-major: [10, 11]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install repo deps (with pnpm 10 toolchain)
+        run: pnpm install --frozen-lockfile
+      - name: Install pnpm ${{ matrix.pnpm-major }} as the integration target
+        if: matrix.pnpm-major != 10
+        run: npm install -g pnpm@${{ matrix.pnpm-major }}
+      - name: Run integration suite
+        env:
+          RUN_INTEGRATION: '1'
+          INTEGRATION_PNPM_MAJOR: ${{ matrix.pnpm-major }}
+        run: pnpm run test:integration

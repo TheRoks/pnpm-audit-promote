@@ -98,7 +98,7 @@ describe('createPnpmRunner output gating', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       EXPLICIT_PNPM_PATH,
       ['install'],
-      expect.objectContaining({ stdio: 'ignore' }),
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
     );
   });
 
@@ -114,7 +114,7 @@ describe('createPnpmRunner output gating', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'pnpm',
       ['install'],
-      expect.objectContaining({ stdio: 'ignore' }),
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
     );
   });
 
@@ -314,7 +314,27 @@ describe('createPnpmRunner output gating', () => {
     await expect(runner.run(['install'])).rejects.toThrow(/failed with exit code 1/);
   });
 
-  it('REQ-RUNNER-002: retries pnpm install once before failing', async () => {
+  it('REQ-RUNNER-008, REQ-ERRORS-004: includes captured pnpm stderr in the failure message', async () => {
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('ERR_PNPM_SOMETHING something broke', 'utf8'));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await expect(runner.run(['install'])).rejects.toThrow(/ERR_PNPM_SOMETHING something broke/);
+  });
+
+  it('REQ-RUNNER-009: retries pnpm install once before failing', async () => {
     spawnMock
       .mockImplementationOnce(() => {
         const child = new EventEmitter();

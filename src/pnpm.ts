@@ -105,8 +105,9 @@ export function createPnpmRunner({
       if (dryRun) return;
       const maxAttempts = isInstallCommand(finalArgs) ? Math.max(0, installRetries) + 1 : 1;
       let lastCode = 0;
+      let lastStderr = '';
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const code = await runWithProgress({
+        const result = await runWithProgress({
           args: finalArgs,
           logger,
           enabled: !inheritOutput,
@@ -114,23 +115,24 @@ export function createPnpmRunner({
           progressIntervalMs,
           execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
         });
-        lastCode = code;
-        if (code === 0) {
+        lastCode = result.code;
+        lastStderr = result.stderr;
+        if (result.code === 0) {
           return;
         }
         if (attempt < maxAttempts) {
           logger.warn(
-            `pnpm ${finalArgs.join(' ')} failed with exit code ${code}; retrying (${attempt}/${maxAttempts - 1}).`,
+            `pnpm ${finalArgs.join(' ')} failed with exit code ${result.code}; retrying (${attempt}/${maxAttempts - 1}).`,
           );
         }
       }
-      throw new PnpmCommandFailedError(finalArgs, lastCode);
+      throw new PnpmCommandFailedError(finalArgs, lastCode, lastStderr);
     },
     async runAllowFail(args) {
       const finalArgs = withExtras(args);
       logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${finalArgs.join(' ')}`);
       if (dryRun) return 0;
-      return runWithProgress({
+      const result = await runWithProgress({
         args: finalArgs,
         logger,
         enabled: !inheritOutput,
@@ -138,6 +140,7 @@ export function createPnpmRunner({
         progressIntervalMs,
         execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
       });
+      return result.code;
     },
     async capture(args) {
       const finalArgs = withExtras(args);
@@ -163,14 +166,19 @@ export function createPnpmRunner({
   };
 }
 
+interface SpawnResult {
+  code: number;
+  stderr: string;
+}
+
 async function runWithProgress(options: {
   args: string[];
   logger: Logger;
   enabled: boolean;
   spinner: boolean;
   progressIntervalMs: number;
-  execute: () => Promise<number>;
-}): Promise<number> {
+  execute: () => Promise<SpawnResult>;
+}): Promise<SpawnResult> {
   const { args, logger, enabled, spinner, progressIntervalMs, execute } = options;
   if (!enabled) {
     return execute();
@@ -201,12 +209,14 @@ async function runWithProgress(options: {
   heartbeat.unref?.();
 
   try {
-    const code = await execute();
+    const result = await execute();
     spinnerController.stop();
     logger.detail(
-      code === 0 ? `Completed ${command}.` : `${command} completed with exit code ${code}.`,
+      result.code === 0
+        ? `Completed ${command}.`
+        : `${command} completed with exit code ${result.code}.`,
     );
-    return code;
+    return result;
   } catch (error) {
     spinnerController.stop();
     logger.detail(`${command} failed.`);
@@ -283,13 +293,25 @@ function spawnPnpm(
   executable: string,
   args: string[],
   opts: { cwd: string; inheritOutput: boolean },
-): Promise<number> {
+): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
+    // When inheriting, output goes straight to the parent terminal and we
+    // cannot capture it. Otherwise, pipe both stdout and stderr so failures
+    // can be reported with the actual pnpm error text instead of an opaque
+    // exit code (pnpm frequently emits ERR_PNPM_* messages on stdout).
     const child = spawn(executable, args, {
       cwd: opts.cwd,
-      stdio: opts.inheritOutput ? 'inherit' : 'ignore',
+      stdio: opts.inheritOutput ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
     });
+    let captured = '';
+    const append = (chunk: Buffer): void => {
+      if (captured.length < 64_000) {
+        captured += chunk.toString('utf8');
+      }
+    };
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         reject(new PnpmNotInstalledError());
@@ -297,7 +319,7 @@ function spawnPnpm(
         reject(err);
       }
     });
-    child.on('close', (code: number | null) => resolve(code ?? 0));
+    child.on('close', (code: number | null) => resolve({ code: code ?? 0, stderr: captured }));
   });
 }
 

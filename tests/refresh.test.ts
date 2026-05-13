@@ -43,7 +43,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     }
   });
 
-  it('REQ-CORE-001, REQ-CORE-005, REQ-CORE-006, REQ-RUNNER-007: completes happy path with skipAudit and skipDedupe', async () => {
+  it('REQ-CORE-001, REQ-CORE-005, REQ-CORE-006, REQ-CORE-007, REQ-RUNNER-007: completes happy path with skipAudit and skipDedupe', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n",
@@ -71,6 +71,10 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // exactly one pnpm install call when audit + dedupe skipped
     const installs = calls.filter((c) => c.args[0] === 'install');
     expect(installs).toHaveLength(1);
+    // REQ-CORE-007: every install must use --no-frozen-lockfile so that
+    // CI runs (which default pnpm to --frozen-lockfile) don't reject installs
+    // that follow the tool's own catalog/override mutations.
+    expect(installs[0]!.args).toEqual(['install', '--no-frozen-lockfile']);
   });
 
   it('REQ-WORKSPACE-008: runs without a pnpm-workspace.yaml when package.json declares pnpm', async () => {

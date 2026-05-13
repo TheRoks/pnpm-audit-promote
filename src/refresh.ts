@@ -40,6 +40,22 @@ import { createProgressLogger } from './progress';
 import { defaultConfirmDestructive, type ConfirmFn } from './prompt';
 import pkg from '../package.json' with { type: 'json' };
 
+/**
+ * Args passed to every `pnpm install` invocation triggered by this tool.
+ *
+ * `--no-frozen-lockfile` is always required because:
+ *   1. The tool intentionally mutates `pnpm-workspace.yaml` (catalog and
+ *      overrides) between installs, so the lockfile *must* be allowed to
+ *      drift to absorb those changes.
+ *   2. pnpm 10/11 enable `--frozen-lockfile` by default whenever the `CI`
+ *      environment variable is set. Without this flag, the install that
+ *      follows a catalog bump fails with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`
+ *      on every CI runner.
+ *   3. Outside CI, `--no-frozen-lockfile` is the default behaviour, so
+ *      passing it explicitly is a no-op there.
+ */
+const INSTALL_ARGS: readonly string[] = ['install', '--no-frozen-lockfile'];
+
 export interface RefreshOptions {
   /** Workspace root containing pnpm-workspace.yaml. */
   path: string;
@@ -363,7 +379,7 @@ async function runInstallAndDedupe(
   opts: { skipDedupe: boolean; installLabel: string },
 ): Promise<void> {
   progressLogger.step(opts.installLabel);
-  await runAndRestore(pnpm, state, logger, ['install']);
+  await runAndRestore(pnpm, state, logger, [...INSTALL_ARGS]);
 
   progressLogger.step('Deduplicate dependency graph');
   if (!opts.skipDedupe) {
@@ -455,7 +471,7 @@ async function runAndRestore(
 ): Promise<void> {
   await pnpm.run(args);
   if (state.restoreWorkspaceYaml(logger)) {
-    await pnpm.run(['install']);
+    await pnpm.run([...INSTALL_ARGS]);
   }
 }
 
@@ -510,7 +526,7 @@ async function preAuditCatalogBump(
     applyPackageJsonDepBumps(pkgJsonBumps, state.dryRun);
   }
 
-  await runAndRestore(pnpm, state, logger, ['install']);
+  await runAndRestore(pnpm, state, logger, [...INSTALL_ARGS]);
 
   // Convert PackageJsonDepBump[] → PackageJsonDepChange[] for the summary.
   return pkgJsonBumps.map((b) => ({

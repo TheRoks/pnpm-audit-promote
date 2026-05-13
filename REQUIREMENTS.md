@@ -34,6 +34,14 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   (steps 7–9) SHALL be skipped while cleanup and install steps still run.
 - **REQ-CORE-006** — When `skipDedupe` is true, every `pnpm dedupe`
   invocation SHALL be skipped.
+- **REQ-CORE-007** — Every `pnpm install` invocation issued by
+  `refreshDeps` SHALL include `--no-frozen-lockfile`. The tool
+  intentionally mutates `pnpm-workspace.yaml` (catalog and overrides)
+  between installs, and pnpm 10/11 enable `--frozen-lockfile` by default
+  whenever the `CI` environment variable is set, which would otherwise
+  fail the post-bump install with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`.
+  Outside CI, `--no-frozen-lockfile` is the default behaviour, so the
+  flag is a no-op there.
 
 ## WORKSPACE — root detection and scope
 
@@ -264,15 +272,21 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-ERRORS-003** — `PnpmNotInstalledError` SHALL extend `Error` and
   have `name === 'PnpmNotInstalledError'`.
 - **REQ-ERRORS-004** — `PnpmCommandFailedError` SHALL extend `Error`,
-  expose `args` and `exitCode`, and have
-  `name === 'PnpmCommandFailedError'`.
+  expose `args`, `exitCode`, and `stderr` (a string containing the
+  trimmed tail of pnpm's captured output, possibly empty), and have
+  `name === 'PnpmCommandFailedError'`. When `stderr` is non-empty, it
+  SHALL be appended to `message` between `--- pnpm stderr ---` markers
+  so the actual pnpm error is visible in CI logs.
 - **REQ-ERRORS-005** — `NonInteractiveConfirmationError` SHALL extend
   `Error` and have `name === 'NonInteractiveConfirmationError'`.
 
 ## PNPM-RUNNER — runner abstraction
 
 - **REQ-RUNNER-001** — `createPnpmRunner` SHALL spawn pnpm via
-  `cross-spawn` and route stdout/stderr through the injected logger.
+  `cross-spawn`. When `inheritOutput` is true, child stdio SHALL be
+  inherited so pnpm writes directly to the parent terminal; otherwise
+  child stdio SHALL be `['ignore', 'pipe', 'pipe']` so stdout and stderr
+  can be captured for diagnostic reporting (REQ-RUNNER-008).
 - **REQ-RUNNER-002** — `PnpmRunner.run` SHALL throw
   `PnpmCommandFailedError` on non-zero exit.
 - **REQ-RUNNER-003** — `PnpmRunner.runAllowFail` SHALL resolve to the
@@ -285,6 +299,16 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   first lookup per runner instance.
 - **REQ-RUNNER-007** — A custom `PnpmRunner` provided via `options.pnpm`
   SHALL be used in place of the default runner (injection point).
+- **REQ-RUNNER-008** — When `inheritOutput` is false, the runner SHALL
+  buffer pnpm's combined stdout and stderr (capped at 64 KB) and, on
+  non-zero exit from `PnpmRunner.run`, SHALL attach the captured tail to
+  the thrown `PnpmCommandFailedError` (see REQ-ERRORS-004). pnpm often
+  emits `ERR_PNPM_*` diagnostics on stdout, so both streams are merged.
+- **REQ-RUNNER-009** — `PnpmRunner.run` SHALL retry a failing `pnpm
+install` invocation up to `installRetries` additional times (default
+  `1`, total of 2 attempts). Each retry SHALL emit a warning through the
+  injected logger. Non-`install` commands and `runAllowFail` SHALL NOT
+  be retried.
 
 ## INTEGRATION — end-to-end scenarios (real pnpm)
 

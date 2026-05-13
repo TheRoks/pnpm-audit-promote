@@ -60,12 +60,17 @@ export class PnpmNotInstalledError extends Error {
 
 /** Thrown when a `pnpm <args>` invocation exits with a non-zero status. */
 export class PnpmCommandFailedError extends Error {
+  public readonly stderr: string;
   constructor(
     public readonly args: readonly string[],
     public readonly exitCode: number,
+    stderr = '',
   ) {
-    super(`pnpm ${args.join(' ')} failed with exit code ${exitCode}`);
+    const trimmed = stderr.trim();
+    const suffix = trimmed ? `\n--- pnpm stderr ---\n${trimmed}\n--- end pnpm stderr ---` : '';
+    super(`pnpm ${args.join(' ')} failed with exit code ${exitCode}${suffix}`);
     this.name = 'PnpmCommandFailedError';
+    this.stderr = trimmed;
   }
 }
 

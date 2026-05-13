@@ -690,4 +690,48 @@ describe('getDirectDepPackageJsonBumps — single-package mode', () => {
     expect(bumps).toHaveLength(1);
     expect(bumps[0]?.pkgJsonPath).toBe(path.join(tmp, 'package.json'));
   });
+
+  it('REQ-AUDIT-009: ranged dep (^) is NOT bumped when advisory severity is below high/critical', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const { runner } = makeRecordingRunner({
+      'audit --json': makeAuditJson('lodash', '<=4.17.20', '>=4.17.21', 'moderate'),
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger);
+    expect(bumps).toHaveLength(0);
+  });
+
+  it('REQ-AUDIT-009: exact-pinned dep IS bumped for moderate severity (no prefix skips severity filter)', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
+    );
+    const { runner } = makeRecordingRunner({
+      'audit --json': makeAuditJson('lodash', '<=4.17.20', '>=4.17.21', 'moderate'),
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger);
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.after).toBe('4.17.21');
+  });
+
+  it('REQ-AUDIT-010: prerelease versions in the available list are excluded from bump candidates', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '4.17.20' } }, null, 2),
+    );
+    const { runner } = makeRecordingRunner({
+      'audit --json': makeAuditJson('lodash', '<=4.17.20', '>=4.17.21'),
+      // Only a prerelease satisfies the range — the stable 4.17.21 is not present.
+      // selectSafeBump should fall back to the range minimum (4.17.21) instead of picking a prerelease.
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21-beta.1', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger);
+    // The stable 4.17.21 is present and should be chosen, not the beta.
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.after).toBe('4.17.21');
+  });
 });

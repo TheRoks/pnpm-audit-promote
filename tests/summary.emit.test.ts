@@ -126,3 +126,47 @@ describe('renderRunSummary summary file writes', () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe('REQ-LOGGING-005: terminal color follows TTY detection', () => {
+  // Match ANSI escape sequences via a dynamically built RegExp to avoid the
+  // no-control-regex lint rule (which also checks RegExp constructor strings).
+  const ansiPattern = new RegExp(String.fromCharCode(27) + '\\[');
+
+  it('REQ-LOGGING-005: colored terminal output is suppressed when stdout is not a TTY', () => {
+    const raw = vi.fn();
+    // Simulate non-TTY environment (e.g. CI pipe)
+    const originalIsTTY = process.stdout.isTTY;
+    try {
+      Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+      renderRunSummary(makeSummary(), { logger: { ...makeLogger(), raw }, dryRun: false });
+    } finally {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+    }
+    const output = raw.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    // No ANSI escape sequences should be present when not a TTY
+    expect(output).not.toMatch(ansiPattern);
+  });
+
+  it('REQ-LOGGING-005: colored terminal output is emitted when stdout is a TTY', () => {
+    const raw = vi.fn();
+    const originalIsTTY = process.stdout.isTTY;
+    try {
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      renderRunSummary(makeSummary({ initialAdvisories: [], finalAdvisories: [] }), {
+        logger: { ...makeLogger(), raw },
+        dryRun: false,
+      });
+    } finally {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+    }
+    const output = raw.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    // ANSI escape sequences should be present when a TTY is attached
+    expect(output).toMatch(ansiPattern);
+  });
+});

@@ -438,4 +438,15 @@ describe('renderTerminalSummary', () => {
 
     expect(out).toMatch(/MODERATE\s+newline-mod\s+CVE-1\s+Line1 Line2 Line3/);
   });
+
+  it('REQ-SUMMARY-008: displays workspace name as run heading when package.json has a name field', () => {
+    const out = renderTerminalSummary(fixture({ workspaceName: 'my-monorepo' }), { color: false });
+    expect(out).toMatch(/my-monorepo/);
+  });
+
+  it('REQ-SUMMARY-008: displays generic heading when workspaceName is absent', () => {
+    const out = renderTerminalSummary(fixture({ workspaceName: undefined }), { color: false });
+    expect(out).toMatch(/Dependency refresh summary|Dependency refresh/);
+    expect(out).not.toMatch(/undefined/);
+  });
 });

@@ -933,4 +933,90 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(yamlAfter).not.toContain('minimumReleaseAgeExclude');
   });
+
+  it('REQ-CORE-008: runs pnpm audit --json before any cleanup or pnpm install', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const { runner, calls } = makeRecordingRunner({
+      'audit --json': JSON.stringify({ advisories: {} }),
+    });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    // The first captured call must be 'audit --json' — before any install.
+    const firstCapture = calls.find((c) => c.capture === true);
+    expect(firstCapture?.args).toEqual(['audit', '--json']);
+
+    // Verify install comes after audit in the call list.
+    const auditIdx = calls.findIndex(
+      (c) => c.capture && c.args[0] === 'audit' && !c.args.includes('--fix'),
+    );
+    const installIdx = calls.findIndex((c) => c.args[0] === 'install');
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(installIdx).toBeGreaterThan(auditIdx);
+  });
+
+  it('REQ-RUNNER-010: workspace packageManager pin takes precedence over pnpm --version on PATH for major detection', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    // package.json pins pnpm 10, but the runner mock reports pnpm 11 on PATH.
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.33.0' }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner({}, { version: '11.9.9' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    // Because workspace pins pnpm 10, audit --fix must NOT include 'override'.
+    const auditFixCalls = calls.filter((c) => c.args[0] === 'audit' && c.args.includes('--fix'));
+    expect(auditFixCalls).toHaveLength(1);
+    expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
+  });
+
+  it('REQ-INVARIANT-001: second run on an already-clean workspace produces empty change sets', async () => {
+    const yaml = "catalog:\n  react: '18.3.1'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    // No advisories: catalog is already at the patched version.
+    const { runner } = makeRecordingRunner({
+      'audit --json': JSON.stringify({ advisories: {} }),
+    });
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(false);
+    expect(result.catalogChanges).toHaveLength(0);
+    expect(result.overrideChanges).toHaveLength(0);
+    expect(result.fixedAdvisories).toHaveLength(0);
+  });
 });

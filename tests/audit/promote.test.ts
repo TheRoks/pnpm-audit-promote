@@ -245,6 +245,25 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     expect(out).not.toContain('overrides:');
   });
 
+  it('REQ-OVERRIDES-006: plain override below current catalog version is discarded (no downgrade)', () => {
+    // Override proposes 6.2.0 but catalog already pins 6.3.5 — must not regress.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.2.0'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.3.5'"); // catalog version unchanged
+    expect(out).not.toContain("vite: '6.2.0'");
+  });
+
+  it('REQ-OVERRIDES-006: plain override equal to current catalog version is discarded (redundant)', () => {
+    // Override matches the catalog exactly — no-op, no overrides block.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.3.5'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.3.5'"); // catalog unchanged
+    // The redundant override should be removed (not promoted, not kept)
+    expect(out.indexOf("vite: '6.3.5'")).toBe(out.lastIndexOf("vite: '6.3.5'")); // only one occurrence
+  });
+
   it('REQ-OVERRIDES-002: keeps a qualified override when the catalog version does not satisfy its selector', () => {
     // Catalog already at 6.4.2, override selector <=6.4.1 does NOT match → keep.
     const yaml = "catalog:\n  vite: '6.4.2'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
@@ -384,5 +403,35 @@ describe('cross-major warning', () => {
     };
     syncAuditOverridesIntoCatalog(state, logger);
     expect(warnings).toEqual([]);
+  });
+
+  it('REQ-OVERRIDES-007: qualified override is discarded after promotion when catalog version no longer satisfies its selector', () => {
+    // vite@<=6.4.1 is promoted: catalog bumps from 6.3.5 → 6.4.2.
+    // The final catalog 6.4.2 does NOT satisfy <=6.4.1, so the override is discarded.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.4.2'");
+    expect(out).not.toContain('vite@<=6.4.1');
+    expect(out).not.toContain('overrides:');
+  });
+
+  it('REQ-OVERRIDES-008: after all pnpm.overrides are removed, the empty overrides and pnpm keys are also removed', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: { overrides: { 'vite@<=6.4.1': '>=6.4.2' } },
+      },
+      null,
+      2,
+    );
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    const newPkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: unknown;
+    };
+    // Both `overrides` and the parent `pnpm` key must be gone.
+    expect(newPkg.pnpm).toBeUndefined();
   });
 });

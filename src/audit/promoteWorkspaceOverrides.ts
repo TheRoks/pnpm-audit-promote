@@ -39,6 +39,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
   const updates = new Map<string, string>();
   const keepItems: Pair[] = [];
 
+  let discarded = false;
   for (const item of overridesNode.items) {
     const key = isScalar(item.key) ? String(item.key.value) : null;
     const val = isScalar(item.value) ? String(item.value.value) : null;
@@ -48,6 +49,14 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
     }
 
     if (isPlainPackageName(key) && catalogNames.has(key)) {
+      // REQ-OVERRIDES-006: never lower the catalog version.
+      // If the override value is at or below the current catalog entry,
+      // discard the override as redundant rather than promoting it.
+      const currentVer = catalogVersions.get(key);
+      if (currentVer && compareSemVer(val, currentVer) <= 0) {
+        discarded = true;
+        continue;
+      }
       updates.set(key, val);
       continue;
     }
@@ -97,7 +106,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
     logger,
   );
 
-  if (updates.size === 0 && !collapsedChanged) return current;
+  if (updates.size === 0 && !collapsedChanged && !discarded) return current;
 
   if (updates.size > 0) {
     reportPromotions(

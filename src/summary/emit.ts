@@ -80,7 +80,7 @@ export interface RenderRunSummaryArgs {
 export function renderRunSummary(summary: RunSummaryData, args: RenderRunSummaryArgs): void {
   const { logger, summaryFile, dryRun } = args;
 
-  const colored = renderTerminalSummary(summary, { color: true });
+  const colored = renderTerminalSummary(summary, { color: process.stdout.isTTY ?? false });
   logger.raw('');
   logger.raw(colored);
 

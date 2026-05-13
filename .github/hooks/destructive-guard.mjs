@@ -9,10 +9,20 @@
 
 /** @type {Array<{re: RegExp, label: string}>} */
 const DESTRUCTIVE_PATTERNS = [
-  // Recursive force delete (rm -rf, rm -fr, rm -Rf, etc.)
+  // Recursive force delete — single flag cluster: -rf, -Rf, -rfv, -Rvf, -rRfFvv…
+  // Lookaheads check that both r/R and f/F are present anywhere in the cluster.
   {
-    re: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b|\brm\s+-[a-zA-Z]*f[a-zA-Z]*r\b/,
+    re: /\brm\s+-(?=[a-zA-Z]*[rR])(?=[a-zA-Z]*[fF])[a-zA-Z]+/,
     label: 'rm -rf (recursive force delete)',
+  },
+  // Recursive force delete — separate flags in any order: rm -r -f, rm -f -r,
+  // rm -r path -f, rm -F -r, etc. Two independent lookaheads verify that a
+  // flag containing r/R and a flag containing f/F both appear after rm.
+  // (?:\s+\S+)* is safe from ReDoS: \s+ and \S+ are disjoint, so each
+  // iteration always consumes ≥2 chars with no ambiguous backtracking path.
+  {
+    re: /\brm\b(?=(?:\s+\S+)*\s+-[a-zA-Z]*[rR][a-zA-Z]*)(?=(?:\s+\S+)*\s+-[a-zA-Z]*[fF][a-zA-Z]*)/,
+    label: 'rm -r ... -f (recursive force delete, separate flags)',
   },
   // Git history / remote mutations
   { re: /\bgit\s+reset\s+--hard\b/, label: 'git reset --hard' },

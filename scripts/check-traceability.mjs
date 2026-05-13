@@ -118,6 +118,7 @@ function main() {
 
   const totalReqs = requirements.size;
   const covered = [...reqToTests.values()].filter((arr) => arr.length > 0).length;
+  const isDeprecated = (id) => /\(deprecated/i.test(requirements.get(id) ?? '');
   const uncovered = totalReqs - covered;
   lines.push(
     `**Coverage:** ${covered}/${totalReqs} requirements have at least one test (` +
@@ -156,14 +157,19 @@ function main() {
   console.log(`Wrote ${relPath(outputFile)} (${covered}/${totalReqs} covered).`);
 
   if (uncovered > 0) {
+    const missing = [...reqToTests.entries()]
+      .filter(([, arr]) => arr.length === 0)
+      .map(([id]) => id);
+    const missingNonDeprecated = missing.filter((id) => !isDeprecated(id));
     const msg = `${uncovered} requirement(s) have no tests.`;
-    if (strict) {
+    if (strict && missingNonDeprecated.length > 0) {
       console.error(msg);
-      const missing = [...reqToTests.entries()]
-        .filter(([, arr]) => arr.length === 0)
-        .map(([id]) => id);
-      for (const id of missing) console.error(`  - ${id}`);
+      for (const id of missingNonDeprecated) console.error(`  - ${id}`);
       process.exit(2);
+    } else if (strict) {
+      console.warn(
+        `${uncovered} requirement(s) have no tests (all marked deprecated — ignored under --strict).`,
+      );
     } else {
       console.warn(msg + ' (warn-only — pass --strict to fail)');
     }

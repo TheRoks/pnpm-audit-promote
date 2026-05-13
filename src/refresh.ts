@@ -9,7 +9,7 @@ import {
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
 } from './cleanup';
-import { getDirectDepCatalogBumps } from './audit/parseAdvisories';
+import { getDirectDepCatalogBumps, extractMinimumPatchedVersions } from './audit/parseAdvisories';
 import {
   applyPackageJsonDepBumps,
   getDirectDepPackageJsonBumps,
@@ -139,69 +139,71 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   const ctx = await prepareRun(options);
   const { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt } = ctx;
 
-  try {
-    const confirm = options.confirm ?? defaultConfirmDestructive;
-    if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
-      logger.info('Operation canceled by user.');
-      return canceledResult(Date.now() - startedAt);
-    }
-
-    const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
-
-    await runCleanupPhase(state, progressLogger);
-
-    await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
-      skipDedupe: Boolean(options.skipDedupe),
-      installLabel: 'Install dependencies',
-    });
-
-    let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-    if (!skipAudit) {
-      pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
-        skipDedupe: Boolean(options.skipDedupe),
-        allowMajor: options.allowMajor ?? true,
-        dryRun,
-        preCleanupAuditRaw: initial.preCleanupAuditRaw,
-        ignoreWorkspace: options.ignoreWorkspace ?? false,
-      });
-    } else {
-      logger.detail('Skipped audit and catalog promotion (--no-audit).');
-    }
-
-    // Always assemble the canonical summary; rendering is conditional.
-    const summary = await collectRunSummary({
-      state,
-      pnpm,
-      skipAudit,
-      dryRun,
-      durationMs: Date.now() - startedAt,
-      toolVersion: pkg.version,
-      workspaceName: initial.workspaceName,
-      originalCatalog: initial.originalCatalog,
-      originalOverrides: initial.originalOverrides,
-      initialAdvisories: initial.initialAdvisories,
-      pkgJsonDepChanges,
-    });
-
-    if (options.summary !== false) {
-      renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
-    }
-
-    const totalElapsed = formatDuration(Date.now() - startedAt);
-    logger.success(
-      dryRun
-        ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
-        : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
-    );
-
-    return summaryToResult(summary);
-  } finally {
-    // Always attempt to restore the user's original `minimumReleaseAge`
-    // setting after pnpm-11 runs, even when an intermediate step throws.
-    if (state.pnpm11TweaksApplied) {
-      state.revertPnpm11WorkspaceTweaks(logger);
-    }
+  const confirm = options.confirm ?? defaultConfirmDestructive;
+  if (!(await confirm({ force: Boolean(options.force), dryRun }))) {
+    logger.info('Operation canceled by user.');
+    return canceledResult(Date.now() - startedAt);
   }
+
+  const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
+
+  // pnpm 11 enforces a global `minimumReleaseAge` gate that, by default,
+  // rejects packages published <24h ago — including the very patches
+  // `pnpm audit --fix` would install. Pre-seed only the *specific*
+  // advisory-fix versions into `minimumReleaseAgeExclude` so the gate
+  // continues to protect every other package (REQ-PNPM11-009/010).
+  if (!dryRun && (state.pnpmMajor ?? 0) >= 11 && initial.preCleanupAuditRaw) {
+    const entries = extractMinimumPatchedVersions(initial.preCleanupAuditRaw);
+    state.seedMinimumReleaseAgeExcludes(entries, logger);
+  }
+
+  await runCleanupPhase(state, progressLogger);
+
+  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
+    skipDedupe: Boolean(options.skipDedupe),
+    installLabel: 'Install dependencies',
+  });
+
+  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+  if (!skipAudit) {
+    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+      skipDedupe: Boolean(options.skipDedupe),
+      allowMajor: options.allowMajor ?? true,
+      dryRun,
+      preCleanupAuditRaw: initial.preCleanupAuditRaw,
+      ignoreWorkspace: options.ignoreWorkspace ?? false,
+    });
+  } else {
+    logger.detail('Skipped audit and catalog promotion (--no-audit).');
+  }
+
+  // Always assemble the canonical summary; rendering is conditional.
+  const summary = await collectRunSummary({
+    state,
+    pnpm,
+    skipAudit,
+    dryRun,
+    durationMs: Date.now() - startedAt,
+    toolVersion: pkg.version,
+    workspaceName: initial.workspaceName,
+    originalCatalog: initial.originalCatalog,
+    originalOverrides: initial.originalOverrides,
+    initialAdvisories: initial.initialAdvisories,
+    pkgJsonDepChanges,
+  });
+
+  if (options.summary !== false) {
+    renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+  }
+
+  const totalElapsed = formatDuration(Date.now() - startedAt);
+  logger.success(
+    dryRun
+      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
+  );
+
+  return summaryToResult(summary);
 }
 
 interface PreparedRun {
@@ -282,7 +284,6 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   }
   state.recordPnpmMajor(major);
   logger.detail(`Target workspace pnpm major: ${major ?? 'unknown'} (from ${source}).`);
-  state.applyPnpm11WorkspaceTweaks(logger);
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }

@@ -824,7 +824,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix']);
   });
 
-  it('REQ-PNPM11-003: reverts temporary pnpm 11 minimumReleaseAge tweak when a later step throws', async () => {
+  it('REQ-PNPM11-010: never injects `minimumReleaseAge: 0` even when a later step throws', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "catalog:\n  react: '18.2.0'\n",
@@ -862,5 +862,71 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(yamlAfter).not.toContain('minimumReleaseAge: 0');
     expect(yamlAfter).toBe("catalog:\n  react: '18.2.0'\n");
+  });
+
+  it('REQ-PNPM11-009: pre-seeds minimumReleaseAgeExclude entries from the initial audit on pnpm 11', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "minimumReleaseAge: 720\ncatalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
+      },
+    });
+    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(yamlAfter).toContain('minimumReleaseAgeExclude:');
+    expect(yamlAfter).toContain('  lodash: 4.17.21');
+    // REQ-PNPM11-010: the user's global gate is preserved verbatim.
+    expect(yamlAfter).toContain('minimumReleaseAge: 720');
+    expect(yamlAfter).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
+  });
+
+  it('REQ-PNPM11-009: does not seed minimumReleaseAgeExclude on pnpm 10', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.0.0' }),
+      'utf8',
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
+      },
+    });
+    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+    expect(yamlAfter).not.toContain('minimumReleaseAgeExclude');
   });
 });

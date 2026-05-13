@@ -56,6 +56,11 @@ export interface PnpmOptions {
   extraArgs?: readonly string[];
   /** Optional explicit absolute path to the pnpm executable. */
   pnpmPath?: string;
+  /**
+   * Number of automatic retries for `pnpm install` on non-zero exit.
+   * Defaults to 1 to absorb transient registry/network flakiness in CI.
+   */
+  installRetries?: number;
 }
 
 export function createPnpmRunner({
@@ -67,6 +72,7 @@ export function createPnpmRunner({
   dryRun = false,
   extraArgs = [],
   pnpmPath,
+  installRetries = 1,
 }: PnpmOptions): PnpmRunner {
   const executable = resolvePnpmPathOrThrow(pnpmPath);
   const withExtras = (args: string[]): string[] =>
@@ -97,17 +103,28 @@ export function createPnpmRunner({
       const finalArgs = withExtras(args);
       logger.trace?.(`${dryRun ? '(dry-run) ' : ''}pnpm ${finalArgs.join(' ')}`);
       if (dryRun) return;
-      const code = await runWithProgress({
-        args: finalArgs,
-        logger,
-        enabled: !inheritOutput,
-        spinner,
-        progressIntervalMs,
-        execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
-      });
-      if (code !== 0) {
-        throw new PnpmCommandFailedError(finalArgs, code);
+      const maxAttempts = isInstallCommand(finalArgs) ? Math.max(0, installRetries) + 1 : 1;
+      let lastCode = 0;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const code = await runWithProgress({
+          args: finalArgs,
+          logger,
+          enabled: !inheritOutput,
+          spinner,
+          progressIntervalMs,
+          execute: () => spawnPnpm(executable, finalArgs, { cwd, inheritOutput }),
+        });
+        lastCode = code;
+        if (code === 0) {
+          return;
+        }
+        if (attempt < maxAttempts) {
+          logger.warn(
+            `pnpm ${finalArgs.join(' ')} failed with exit code ${code}; retrying (${attempt}/${maxAttempts - 1}).`,
+          );
+        }
       }
+      throw new PnpmCommandFailedError(finalArgs, lastCode);
     },
     async runAllowFail(args) {
       const finalArgs = withExtras(args);
@@ -256,6 +273,10 @@ function toSpinnerLabel(command: string): string {
   }
   const shortCommand = command.startsWith('pnpm ') ? command.slice(5) : command;
   return `Running ${shortCommand}`;
+}
+
+function isInstallCommand(args: readonly string[]): boolean {
+  return args[0] === 'install';
 }
 
 function spawnPnpm(

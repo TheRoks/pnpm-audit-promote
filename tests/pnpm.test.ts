@@ -314,6 +314,37 @@ describe('createPnpmRunner output gating', () => {
     await expect(runner.run(['install'])).rejects.toThrow(/failed with exit code 1/);
   });
 
+  it('REQ-RUNNER-002: retries pnpm install once before failing', async () => {
+    spawnMock
+      .mockImplementationOnce(() => {
+        const child = new EventEmitter();
+        queueMicrotask(() => {
+          child.emit('close', 1);
+        });
+        return child;
+      })
+      .mockImplementationOnce(() => {
+        const child = new EventEmitter();
+        queueMicrotask(() => {
+          child.emit('close', 0);
+        });
+        return child;
+      });
+
+    const warn = vi.fn();
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: { ...makeLogger(), warn },
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await expect(runner.run(['install'])).resolves.toBeUndefined();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/pnpm install failed with exit code 1; retrying/),
+    );
+  });
+
   it('REQ-RUNNER-003: returns non-zero from runAllowFail', async () => {
     mockExit(2);
     const runner = createPnpmRunner({

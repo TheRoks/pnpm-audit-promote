@@ -25,6 +25,7 @@ import {
 describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real pnpm', () => {
   const localMajor = detectPnpmMajor();
   const wantMajor = expectedPnpmMajor();
+  const hasMajorMismatch = wantMajor != null && localMajor != null && wantMajor !== localMajor;
   if (wantMajor != null && localMajor != null && wantMajor !== localMajor) {
     console.warn(
       `[integration] Skipping: INTEGRATION_PNPM_MAJOR=${wantMajor} but pnpm --version reports ${localMajor}.`,
@@ -37,7 +38,7 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
     ws = undefined;
   });
 
-  describe.skipIf(localMajor !== 10)('pnpm 10', () => {
+  describe.skipIf(hasMajorMismatch || localMajor !== 10)('pnpm 10', () => {
     it('REQ-INT-PNPM10-001: bumps a vulnerable direct catalog dep and leaves no override', async () => {
       ws = setupRealWorkspace('v10-direct-vuln');
 
@@ -67,7 +68,7 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
     });
   });
 
-  describe.skipIf(localMajor !== 11)('pnpm 11', () => {
+  describe.skipIf(hasMajorMismatch || localMajor !== 11)('pnpm 11', () => {
     it('REQ-INT-PNPM11-001, REQ-PNPM11-010: bumps catalog and preserves user minimumReleaseAge verbatim', async () => {
       ws = setupRealWorkspace('v11-direct-vuln');
 

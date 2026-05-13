@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": ".github/hooks/requirements-traceability.sh",
+        "timeout": 30
+      }
+    ]
+  }
+}

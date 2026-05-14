@@ -164,7 +164,7 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
 function compareSemver(a: string, b: string): number {
   const norm = (v: string) =>
     v
-      .replace(/^[\^~]/, '')
+      .replace(/^[^\d]*/u, '')
       .split('.')
       .map((s) => Number.parseInt(s, 10) || 0);
   const [a1, a2, a3] = norm(a);

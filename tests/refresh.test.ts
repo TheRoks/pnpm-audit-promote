@@ -1019,4 +1019,69 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(result.overrideChanges).toHaveLength(0);
     expect(result.fixedAdvisories).toHaveLength(0);
   });
+
+  it('REQ-INVARIANT-002: dry-run does not mutate workspace yaml, lockfile, or package.json', async () => {
+    const yamlContent = "catalog:\n  react: '18.2.0'\n";
+    const pkgContent = '{"name":"root"}';
+    const lockContent = 'lockfileVersion: 9.0\n';
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yamlContent, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), pkgContent, 'utf8');
+    fs.writeFileSync(path.join(tmp, 'pnpm-lock.yaml'), lockContent, 'utf8');
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      dryRun: true,
+      skipAudit: true,
+      skipDedupe: true,
+    });
+
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toBe(yamlContent);
+    expect(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')).toBe(pkgContent);
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-lock.yaml'), 'utf8')).toBe(lockContent);
+  });
+
+  it('REQ-CORE-009: logs a warning and continues with empty advisory baseline when pre-cleanup audit throws', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const warnings: string[] = [];
+    const warningLogger = {
+      ...silentLogger,
+      warn(msg: string) {
+        warnings.push(msg);
+      },
+    };
+
+    // A runner whose capture() throws only on the FIRST audit call (pre-cleanup).
+    const { runner } = makeRecordingRunner();
+    let auditCallCount = 0;
+    const throwingRunner = {
+      ...runner,
+      async capture(args: string[]) {
+        if (args[0] === 'audit') {
+          auditCallCount++;
+          if (auditCallCount === 1) throw new Error('no lockfile');
+        }
+        return runner.capture(args);
+      },
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: warningLogger,
+      pnpm: throwingRunner,
+      skipDedupe: true,
+    });
+
+    expect(result.canceled).toBe(false);
+    expect(result.initialAdvisories).toHaveLength(0);
+    expect(warnings.some((w) => w.includes('Pre-cleanup audit failed'))).toBe(true);
+  });
 });

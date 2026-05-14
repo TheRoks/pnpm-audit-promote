@@ -98,7 +98,7 @@ describe('selectSafeBump', () => {
     expect(r).toBeNull();
   });
 
-  it('works without an available list (falls back to minVersion)', () => {
+  it('REQ-AUDIT-014: works without an available list (falls back to minVersion)', () => {
     const r = selectSafeBump('1.0.0', '>=1.2.3', []);
     expect(r).toEqual({ version: '1.2.3', tier: 'minor' });
   });

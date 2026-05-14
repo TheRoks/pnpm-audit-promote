@@ -166,7 +166,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     return canceledResult(Date.now() - startedAt);
   }
 
-  const initial = await captureInitialState(state, pnpm, { skipAudit, dryRun });
+  const initial = await captureInitialState(state, pnpm, logger, { skipAudit, dryRun });
 
   // pnpm 11 enforces a global `minimumReleaseAge` gate that, by default,
   // rejects packages published <24h ago — including the very patches
@@ -328,6 +328,7 @@ interface InitialState {
 async function captureInitialState(
   state: WorkspaceState,
   pnpm: PnpmRunner,
+  logger: Logger,
   opts: { skipAudit: boolean; dryRun: boolean },
 ): Promise<InitialState> {
   // Capture the original state BEFORE any cleanup mutates files. Used by
@@ -361,9 +362,12 @@ async function captureInitialState(
       } catch {
         // stdout is not JSON — leave preCleanupAuditRaw empty
       }
-    } catch {
+    } catch (err) {
       // Best-effort: a missing lockfile or other audit failure leaves the
-      // initial set empty rather than aborting the whole run.
+      // initial set empty rather than aborting the whole run (REQ-CORE-009).
+      logger.warn(
+        `Pre-cleanup audit failed: ${err instanceof Error ? err.message : String(err)}. Continuing with empty advisory baseline.`,
+      );
     }
   }
 

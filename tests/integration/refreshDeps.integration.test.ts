@@ -102,7 +102,7 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
   });
 
   describe.skipIf(hasMajorMismatch || localMajor !== 11)('pnpm 11', () => {
-    it('REQ-INT-PNPM11-001, REQ-PNPM11-010: bumps catalog and preserves user minimumReleaseAge verbatim', async () => {
+    it('REQ-INT-PNPM11-001, REQ-PNPM11-010, REQ-INT-PNPM11-004: bumps catalog and preserves user minimumReleaseAge verbatim', async () => {
       ws = setupRealWorkspace('v11-direct-vuln');
 
       const result = await refreshDeps({

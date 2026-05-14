@@ -8,7 +8,11 @@ import { resolveWorkspacePackageDirs } from '../workspace';
 import { findWorkspaceFiles } from '../fsWalk';
 import { setJsonProperty } from '../jsonEdit';
 import { selectSafeBump, type BumpTier, normalizeRange } from '../semverUtil';
-import { advisoryAppliesToCurrent, getAvailableVersions } from './parseAdvisories';
+import {
+  advisoryAppliesToCurrent,
+  getAvailableVersions,
+  advisoryMatchesIgnoreList,
+} from './parseAdvisories';
 
 /** Dep field types that can hold concrete package versions. */
 type DepType = 'dependencies' | 'devDependencies' | 'peerDependencies' | 'optionalDependencies';
@@ -72,6 +76,17 @@ export interface DirectDepPkgJsonBumpOptions {
   allowMajor?: boolean;
   /** Pre-fetched `pnpm audit --json` stdout. Avoids a second audit call. */
   auditJsonStdout?: string;
+  /**
+   * Set of GHSA or CVE identifiers to ignore. Advisories matching any ID in
+   * this set are excluded from bump decisions.
+   */
+  ignoredAdvisoryIds?: ReadonlySet<string>;
+  /**
+   * Minimum severity threshold for ranged-dep (`^`/`~`) bumps. Defaults to
+   * `'high'`. Exact-pinned deps are always bumped regardless of severity.
+   * Valid values (ascending): `info`, `low`, `moderate`, `high`, `critical`.
+   */
+  minSeverity?: string;
 }
 
 interface PnpmAuditAdvisory {
@@ -79,9 +94,22 @@ interface PnpmAuditAdvisory {
   patched_versions?: string;
   vulnerable_versions?: string;
   severity?: string;
+  github_advisory_id?: string;
+  cves?: string[];
+  url?: string;
 }
 interface PnpmAuditOutput {
   advisories?: Record<string, PnpmAuditAdvisory>;
+}
+
+const SEVERITY_ORDER = ['info', 'low', 'moderate', 'high', 'critical'] as const;
+type AuditSeverity = (typeof SEVERITY_ORDER)[number];
+
+function meetsSeverityThreshold(severity: string, minSeverity: string): boolean {
+  const idx = SEVERITY_ORDER.indexOf(severity.toLowerCase() as AuditSeverity);
+  const minIdx = SEVERITY_ORDER.indexOf(minSeverity.toLowerCase() as AuditSeverity);
+  if (idx === -1 || minIdx === -1) return false;
+  return idx >= minIdx;
 }
 
 /**
@@ -146,6 +174,11 @@ export async function getDirectDepPackageJsonBumps(
     const patchedRange = adv.patched_versions ?? '';
     if (!patchedRange || !normalizeRange(patchedRange)) continue;
 
+    if (options.ignoredAdvisoryIds && advisoryMatchesIgnoreList(adv, options.ignoredAdvisoryIds)) {
+      logger.detail(`Skipped ignored advisory for ${module}.`);
+      continue;
+    }
+
     const available = await getAvailableVersions(pnpm, module, versionCache);
 
     for (const loc of locations) {
@@ -153,9 +186,10 @@ export async function getDirectDepPackageJsonBumps(
 
       if (parsed.prefix !== '') {
         const sev = (adv.severity ?? '').toLowerCase();
-        if (sev !== 'high' && sev !== 'critical') {
+        const effectiveMin = options.minSeverity ?? 'high';
+        if (!meetsSeverityThreshold(sev, effectiveMin)) {
           logger.detail(
-            `Skipped ranged dep ${module} in ${loc.pkgJsonPath}: severity "${sev || 'unknown'}" is below high/critical threshold.`,
+            `Skipped ranged dep ${module} in ${loc.pkgJsonPath}: severity "${sev || 'unknown'}" is below ${effectiveMin} threshold.`,
           );
           continue;
         }

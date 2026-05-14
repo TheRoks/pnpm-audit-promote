@@ -1,0 +1,5 @@
+# lodash is intentionally NOT in the catalog — it is a direct dep on the app
+# package. The audit pass should produce a workspace override, NOT a catalog
+# promotion, because it is not catalog-managed.
+packages:
+  - 'apps/*'

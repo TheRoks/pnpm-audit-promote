@@ -6,6 +6,7 @@
  *
  * Triggered by: .github/hooks/destructive-guard.json
  */
+import process from 'node:process';
 
 /** @type {Array<{re: RegExp, label: string}>} */
 const DESTRUCTIVE_PATTERNS = [
@@ -53,21 +54,15 @@ const SAFE_RM_TARGETS = new Set([
 ]);
 
 /** Tool names that execute shell commands. */
-const SHELL_TOOLS = new Set([
-  'run_in_terminal',
-  'execute',
-  'bash',
-  'shell',
-  'terminal',
-]);
+const SHELL_TOOLS = new Set(['run_in_terminal', 'execute', 'bash', 'shell', 'terminal']);
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 const chunks = [];
-process.stdin.on('data', d => chunks.push(d));
+process.stdin.on('data', (d) => chunks.push(d));
 process.stdin.on('end', () => {
   /** @type {Record<string, unknown>} */
-  let payload = {};
+  let payload;
   try {
     payload = JSON.parse(chunks.join(''));
   } catch {
@@ -81,7 +76,7 @@ process.stdin.on('end', () => {
   const cmd = String(inp.command ?? inp.cmd ?? '').trim();
 
   // Only inspect tools that execute shell commands
-  const isShellTool = [...SHELL_TOOLS].some(t => toolName.includes(t));
+  const isShellTool = [...SHELL_TOOLS].some((t) => toolName.includes(t));
   if (!isShellTool || !cmd) {
     allow();
     return;
@@ -123,7 +118,7 @@ function firstDestructiveReason(cmd) {
     // For rm -rf, skip if every target token is on the safe list
     if (label.startsWith('rm')) {
       const targets = extractRmTargets(cmd);
-      if (targets.length > 0 && targets.every(t => SAFE_RM_TARGETS.has(t))) continue;
+      if (targets.length > 0 && targets.every((t) => SAFE_RM_TARGETS.has(t))) continue;
     }
 
     return label;
@@ -140,7 +135,10 @@ function firstDestructiveReason(cmd) {
  */
 function extractRmTargets(cmd) {
   // Strip "rm" and any flag tokens (start with -)
-  const tokens = cmd.split(/\s+/).slice(1).filter(t => !t.startsWith('-'));
+  const tokens = cmd
+    .split(/\s+/)
+    .slice(1)
+    .filter((t) => !t.startsWith('-'));
   // Normalize: take only the basename for matching
-  return tokens.map(t => t.replace(/\/$/, '').split('/').pop() ?? t);
+  return tokens.map((t) => t.replace(/\/$/, '').split('/').pop() ?? t);
 }

@@ -499,6 +499,121 @@ describe('getDirectDepPackageJsonBumps', () => {
 });
 
 // ---------------------------------------------------------------------------
+// ignoredAdvisoryIds filtering (REQ-AUDIT-011)
+// ---------------------------------------------------------------------------
+
+describe('getDirectDepPackageJsonBumps – ignoredAdvisoryIds', () => {
+  it('REQ-AUDIT-011: skips advisory matching github_advisory_id in ignoredAdvisoryIds', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'lodash',
+          vulnerable_versions: '<=4.17.20',
+          patched_versions: '>=4.17.21',
+          severity: 'high',
+          github_advisory_id: 'GHSA-test-1234-abcd',
+        },
+      },
+    });
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger, {
+      ignoredAdvisoryIds: new Set(['GHSA-test-1234-abcd']),
+    });
+    expect(bumps).toHaveLength(0);
+  });
+
+  it('REQ-AUDIT-011: processes advisory when its ID is not in ignoredAdvisoryIds', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: 'lodash',
+          vulnerable_versions: '<=4.17.20',
+          patched_versions: '>=4.17.21',
+          severity: 'high',
+          github_advisory_id: 'GHSA-test-1234-abcd',
+        },
+      },
+    });
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger, {
+      ignoredAdvisoryIds: new Set(['GHSA-9999-0000-zzzz']),
+    });
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.after).toBe('^4.17.21');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// minSeverity threshold (REQ-AUDIT-012)
+// ---------------------------------------------------------------------------
+
+describe('getDirectDepPackageJsonBumps – minSeverity', () => {
+  it('REQ-AUDIT-012: with minSeverity=moderate, bumps ranged dep on moderate advisory', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const auditJson = makeAuditJson('lodash', '<=4.17.20', '>=4.17.21', 'moderate');
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger, {
+      minSeverity: 'moderate',
+    });
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.after).toBe('^4.17.21');
+  });
+
+  it('REQ-AUDIT-012: with minSeverity=critical, skips ranged dep on high advisory', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const auditJson = makeAuditJson('lodash', '<=4.17.20', '>=4.17.21', 'high');
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger, {
+      minSeverity: 'critical',
+    });
+    expect(bumps).toHaveLength(0);
+  });
+
+  it('REQ-AUDIT-012: with minSeverity=low, bumps ranged dep on low advisory', async () => {
+    const state = writeWorkspace(
+      MINIMAL_WORKSPACE_YAML,
+      JSON.stringify({ name: 'root', dependencies: { lodash: '^4.17.20' } }, null, 2),
+    );
+    const auditJson = makeAuditJson('lodash', '<=4.17.20', '>=4.17.21', 'low');
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view lodash versions --json': makeVersionsJson(['4.17.20', '4.17.21']),
+    });
+    const bumps = await getDirectDepPackageJsonBumps(state, runner, silentLogger, {
+      minSeverity: 'low',
+    });
+    expect(bumps).toHaveLength(1);
+    expect(bumps[0]?.after).toBe('^4.17.21');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // applyPackageJsonDepBumps
 // ---------------------------------------------------------------------------
 

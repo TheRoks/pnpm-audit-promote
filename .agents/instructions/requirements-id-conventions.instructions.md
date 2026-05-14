@@ -1,6 +1,6 @@
 ---
-description: "Use when writing or editing REQUIREMENTS.md: enforces REQ-AREA-NNN ID format, SHALL statement style, deprecation policy, and test-traceability conventions for pnpm-audit-promote."
-applyTo: "**/REQUIREMENTS.md"
+description: 'Use when writing or editing REQUIREMENTS.md: enforces REQ-AREA-NNN ID format, SHALL statement style, deprecation policy, and test-traceability conventions for pnpm-audit-promote.'
+applyTo: '**/REQUIREMENTS.md'
 ---
 
 # Requirements ID Conventions
@@ -16,24 +16,24 @@ Every requirement MUST carry a stable ID of the form `REQ-<AREA>-<NNN>`:
 
 ### Defined areas (extend this list when adding a new section)
 
-| Area token | Section heading |
-|---|---|
-| `CORE` | refresh orchestration |
-| `WORKSPACE` | root detection and scope |
-| `SAFETY` | destructive-action guards |
-| `CATALOG` | pnpm-workspace.yaml manipulation |
-| `OVERRIDES` | promotion logic |
-| `AUDIT` | direct-dep handling and bump selection |
-| `PNPM10` | pnpm 10 specific behavior |
-| `PNPM11` | pnpm 11 specific behavior |
-| `SUMMARY` | run summary output |
-| `CLI` | command-line interface |
-| `LOGGING` | log levels and formatting |
-| `PORTABILITY` | cross-platform behavior |
-| `ERRORS` | typed error contract |
-| `PNPM-RUNNER` | runner abstraction |
-| `INVARIANT` | idempotency |
-| `INTEGRATION` | end-to-end scenarios (real pnpm) |
+| Area token    | Section heading                        |
+| ------------- | -------------------------------------- |
+| `CORE`        | refresh orchestration                  |
+| `WORKSPACE`   | root detection and scope               |
+| `SAFETY`      | destructive-action guards              |
+| `CATALOG`     | pnpm-workspace.yaml manipulation       |
+| `OVERRIDES`   | promotion logic                        |
+| `AUDIT`       | direct-dep handling and bump selection |
+| `PNPM10`      | pnpm 10 specific behavior              |
+| `PNPM11`      | pnpm 11 specific behavior              |
+| `SUMMARY`     | run summary output                     |
+| `CLI`         | command-line interface                 |
+| `LOGGING`     | log levels and formatting              |
+| `PORTABILITY` | cross-platform behavior                |
+| `ERRORS`      | typed error contract                   |
+| `PNPM-RUNNER` | runner abstraction                     |
+| `INVARIANT`   | idempotency                            |
+| `INTEGRATION` | end-to-end scenarios (real pnpm)       |
 
 When adding a new area, add a `## <AREA> — <description>` section heading AND a row in this table.
 

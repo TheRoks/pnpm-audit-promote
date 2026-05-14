@@ -396,6 +396,52 @@ export function findEnclosingPnpmWorkspaceYaml(startDir: string): string | null 
   }
 }
 
+/**
+ * Parse `auditConfig.ignoreGhsas` and `auditConfig.ignoreCves` from the
+ * text of a `pnpm-workspace.yaml` file and return them as a unified `Set`.
+ * Returns an empty `Set` on any parse failure or if neither key is present.
+ */
+export function readAuditIgnoreList(yamlContent: string): Set<string> {
+  if (!yamlContent.trim()) return new Set();
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(yamlContent);
+  } catch {
+    return new Set();
+  }
+  if (parsed === null || typeof parsed !== 'object') return new Set();
+  const auditConfig = (parsed as Record<string, unknown>)['auditConfig'];
+  if (auditConfig === null || typeof auditConfig !== 'object') return new Set();
+  const cfg = auditConfig as Record<string, unknown>;
+  const ids = new Set<string>();
+  for (const key of ['ignoreGhsas', 'ignoreCves'] as const) {
+    const list = cfg[key];
+    if (Array.isArray(list)) {
+      for (const id of list) {
+        if (typeof id === 'string' && id.trim()) ids.add(id.trim());
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Parse the top-level `auditLevel` key from a `pnpm-workspace.yaml` file.
+ * Returns the string value when present, `null` otherwise.
+ */
+export function readAuditLevel(yamlContent: string): string | null {
+  if (!yamlContent.trim()) return null;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(yamlContent);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const level = (parsed as Record<string, unknown>)['auditLevel'];
+  return typeof level === 'string' ? level : null;
+}
+
 /** Extract the `packages:` list from pnpm-workspace.yaml text. */
 function extractYamlPackagesGlobs(yaml: string): string[] | null {
   let parsed: unknown;

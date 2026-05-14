@@ -184,10 +184,22 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   without crashing the run; the audit phase SHALL log a warning and proceed.
 - **REQ-AUDIT-009** — Direct dependencies declared with a range prefix
   (`^`, `~`) in `package.json` SHALL only have their version floor raised
-  when the advisory severity is `high` or `critical`. Exact-pinned direct
-  dependencies SHALL be bumped for any advisory severity.
+  when the advisory severity meets or exceeds the effective minimum threshold
+  (see REQ-AUDIT-012; default is `high`). Exact-pinned direct dependencies
+  SHALL be bumped for any advisory severity.
 - **REQ-AUDIT-010** — Prerelease versions SHALL be excluded from the set of
   candidate bump versions when resolving a patched semver range.
+- **REQ-AUDIT-011** — The tool SHALL read `auditConfig.ignoreGhsas` (pnpm 11)
+  and `auditConfig.ignoreCves` (pnpm 10) from `pnpm-workspace.yaml`. Any
+  advisory whose `github_advisory_id` matches an entry in `ignoreGhsas`, or
+  whose `cves` list intersects with `ignoreCves`, SHALL be excluded from all
+  direct-dep bump decisions (both catalog and `package.json` bumps).
+- **REQ-AUDIT-012** — The tool SHALL read the top-level `auditLevel` key from
+  `pnpm-workspace.yaml` and use its value as the effective minimum severity
+  threshold for ranged-dep bump decisions (superseding the hard-coded `high`
+  default from REQ-AUDIT-009). Valid values are `info`, `low`, `moderate`,
+  `high`, and `critical`. When `auditLevel` is absent the default of `high`
+  SHALL be preserved.
 
 ## PNPM10 — pnpm 10 specific behavior
 
@@ -317,6 +329,10 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   style (`\r\n` vs `\n`).
 - **REQ-PORTABILITY-004** _(deprecated — path comparisons rely on Node.js
   platform-native semantics; no explicit case-folding is performed.)_
+- **REQ-PORTABILITY-005** — When `syncPackageJsonOverridesIntoCatalog`
+  rewrites the body of the `overrides` object, the closing `}` SHALL use
+  the same indentation as it had in the original file (2-space, 4-space,
+  or tab-based).
 
 ## ERRORS — typed error contract
 
@@ -386,10 +402,17 @@ real pnpm 10 and pnpm 11 binaries.
 - **REQ-INT-PNPM10-001** — Against a pnpm 10 workspace with a vulnerable
   direct catalog dep, the catalog version SHALL be bumped and no override
   SHALL remain for that package.
-- **REQ-INT-PNPM10-002** _(future — transitive-vulnerability fixture not yet shipped; tracked for follow-up.)_
+- **REQ-INT-PNPM10-002** — Against a pnpm 10 workspace where a vulnerable
+  package is a direct dependency of a member package but is **not** listed in
+  the workspace catalog, `refreshDeps` SHALL add a workspace-level override
+  for that package and SHALL NOT create a catalog entry for it.
 - **REQ-INT-PNPM11-001** — Against a pnpm 11 workspace with a vulnerable
   direct catalog dep, the catalog SHALL be bumped, the override SHALL be
-  promoted, and the user’s original `minimumReleaseAge` SHALL be restored
+  promoted, and the user's original `minimumReleaseAge` SHALL be restored
   in the final `pnpm-workspace.yaml` (no `minimumReleaseAge: 0` leak).
 - **REQ-INT-PNPM11-002** _(future — multi-selector overrides fixture not yet shipped; tracked for follow-up.)_
-- **REQ-INT-PNPM11-003** _(future — ignore-workspace fixture not yet shipped; tracked for follow-up.)_
+- **REQ-INT-PNPM11-003** — Against a pnpm 11 workspace that has no
+  `pnpm-workspace.yaml` and is run with `ignoreWorkspace: true`, `refreshDeps`
+  SHALL migrate the overrides written by `pnpm audit --fix` into the root
+  `package.json`'s `pnpm.overrides` block so that the subsequent install
+  picks them up.

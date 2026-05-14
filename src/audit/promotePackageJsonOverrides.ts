@@ -118,7 +118,14 @@ export function syncPackageJsonOverridesIntoCatalog(
   }
 
   const eol = pjText.includes('\r\n') ? '\r\n' : '\n';
-  const newBody = cleaned.length === 0 ? '' : `${eol}${cleaned.join(eol)}${eol}  `;
+  // Re-use the original indentation that preceded the closing `}` of the
+  // overrides object so the rewritten block blends in with the file's style
+  // (2-space, 4-space, tab, etc.) instead of hardcoding 2 spaces.
+  const textBeforeClose = pjText.slice(0, end);
+  const prevNl = textBeforeClose.lastIndexOf('\n');
+  const rawIndent = prevNl >= 0 ? textBeforeClose.slice(prevNl + 1) : '';
+  const closingIndent = /^[\t ]*$/.test(rawIndent) ? rawIndent : '  ';
+  const newBody = cleaned.length === 0 ? '' : `${eol}${cleaned.join(eol)}${eol}${closingIndent}`;
 
   let newPj = pjText.slice(0, bodyStart) + newBody + pjText.slice(end);
 

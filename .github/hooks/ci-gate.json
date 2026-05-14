@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "bash .github/hooks/ci-gate.sh",
+        "timeout": 60
+      }
+    ]
+  }
+}

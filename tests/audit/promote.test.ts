@@ -220,6 +220,69 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
     expect(out).toBe(yaml);
   });
+
+  it('REQ-PORTABILITY-005: preserves 4-space indentation of overrides closing brace', () => {
+    // A 4-space-indented monorepo package.json has `pnpm.overrides` at nesting
+    // depth 2, so the closing `}` of the overrides object should sit at 8 spaces.
+    // The bug wrote only 2 spaces (hardcoded) regardless of the file's style.
+    // We need a promotion to happen so the file is actually rewritten (otherwise
+    // the function returns early and the original file is kept intact).
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: {
+          overrides: {
+            // Catalog-eligible: react@<=18.2.0 satisfies the range → promoted, forcing a write.
+            'react@<=18.2.0': '>=18.3.1',
+            // Non-catalog: vite stays as residual override.
+            'vite@<=6.4.1': '>=6.4.2',
+          },
+        },
+      },
+      null,
+      4, // ← 4-space indentation
+    );
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+
+    const newPkg = fs.readFileSync(path.join(tmp, 'package.json'), 'utf8');
+    // Entry line has 12-space indent (3 levels × 4 spaces).
+    expect(newPkg).toContain('\n            "vite@<=6.4.1"');
+    // Closing `}` of overrides block must keep its original 8-space indent.
+    expect(newPkg).toContain('\n        }');
+    // Sanity: the JSON must still be valid with the correct structure.
+    const parsed = JSON.parse(newPkg) as { pnpm?: { overrides?: Record<string, string> } };
+    expect(parsed.pnpm?.overrides?.['vite@<=6.4.1']).toBe('>=6.4.2');
+  });
+
+  it('REQ-PORTABILITY-005: preserves tab indentation of overrides closing brace', () => {
+    // Hand-crafted tab-indented package.json. The `overrides` key sits at
+    // depth 2, so its closing `}` must use 2 tabs (\t\t).
+    // A catalog-eligible entry forces the write path to be taken.
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = [
+      '{',
+      '\t"name": "root",',
+      '\t"pnpm": {',
+      '\t\t"overrides": {',
+      '\t\t\t"react@<=18.2.0": ">=18.3.1",',
+      '\t\t\t"vite@<=6.4.1": ">=6.4.2"',
+      '\t\t}',
+      '\t}',
+      '}',
+      '',
+    ].join('\n');
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+
+    const newPkg = fs.readFileSync(path.join(tmp, 'package.json'), 'utf8');
+    // Closing `}` of overrides block must use 2 tabs.
+    expect(newPkg).toContain('\n\t\t}');
+    // Sanity: the JSON must still be valid with the correct structure.
+    const parsed = JSON.parse(newPkg) as { pnpm?: { overrides?: Record<string, string> } };
+    expect(parsed.pnpm?.overrides?.['vite@<=6.4.1']).toBe('>=6.4.2');
+  });
 });
 
 describe('syncAuditOverridesIntoCatalog qualified overrides', () => {

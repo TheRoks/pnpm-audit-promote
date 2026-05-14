@@ -1,6 +1,11 @@
 import * as path from 'node:path';
 import { consoleLogger, type Logger } from './logger';
-import { WorkspaceState, detectWorkspacePnpmMajor } from './workspace';
+import {
+  WorkspaceState,
+  detectWorkspacePnpmMajor,
+  readAuditIgnoreList,
+  readAuditLevel,
+} from './workspace';
 import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor, type PnpmRunner } from './pnpm';
 import { mergeMinimumReleaseAgeExclude } from './workspaceYamlPnpm11';
 import {
@@ -484,9 +489,14 @@ async function preAuditCatalogBump(
   preCleanupAuditRaw: string,
 ): Promise<PackageJsonDepChange[]> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
+
+  const ignoredAdvisoryIds = readAuditIgnoreList(state.desiredWorkspaceYaml);
+  const minSeverity = readAuditLevel(state.desiredWorkspaceYaml) ?? undefined;
+
   const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
     allowMajor,
     auditJsonStdout,
+    ignoredAdvisoryIds: ignoredAdvisoryIds.size > 0 ? ignoredAdvisoryIds : undefined,
   });
   // For package.json ranged deps (^/~), the post-cleanup install may resolve
   // to a safe-in-range version that makes the advisory disappear from the
@@ -497,6 +507,8 @@ async function preAuditCatalogBump(
   const pkgJsonBumps = await getDirectDepPackageJsonBumps(state, pnpm, logger, {
     allowMajor,
     auditJsonStdout: pkgJsonAuditStdout,
+    ignoredAdvisoryIds: ignoredAdvisoryIds.size > 0 ? ignoredAdvisoryIds : undefined,
+    minSeverity,
   });
 
   logger.step('Reinstall dependencies after catalog updates');

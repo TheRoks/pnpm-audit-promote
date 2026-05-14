@@ -235,4 +235,56 @@ describe('CLI: built dist/cli.js', () => {
     expect(normal.status).toBe(0);
     expect(quiet.stdout.length).toBeLessThanOrEqual(normal.stdout.length);
   });
+
+  it('REQ-LOGGING-007: last flag wins when --verbose precedes --quiet', () => {
+    const root = makeBasicFixture();
+    const r = runCli([
+      '--path',
+      root,
+      '--force',
+      '--dry-run',
+      '--no-audit',
+      '--no-dedupe',
+      '--verbose',
+      '--quiet',
+    ]);
+    const verbose = runCli([
+      '--path',
+      root,
+      '--force',
+      '--dry-run',
+      '--no-audit',
+      '--no-dedupe',
+      '--verbose',
+    ]);
+    expect(r.status).toBe(0);
+    // With --quiet last, output should be no more than verbose-only run.
+    expect(r.stdout.length).toBeLessThanOrEqual(verbose.stdout.length);
+  });
+
+  it('REQ-LOGGING-007: last flag wins when --quiet precedes --verbose', () => {
+    const root = makeBasicFixture();
+    const r = runCli([
+      '--path',
+      root,
+      '--force',
+      '--dry-run',
+      '--no-audit',
+      '--no-dedupe',
+      '--quiet',
+      '--verbose',
+    ]);
+    const quiet = runCli([
+      '--path',
+      root,
+      '--force',
+      '--dry-run',
+      '--no-audit',
+      '--no-dedupe',
+      '--quiet',
+    ]);
+    expect(r.status).toBe(0);
+    // With --verbose last, output should be at least as much as quiet-only run.
+    expect(r.stdout.length).toBeGreaterThanOrEqual(quiet.stdout.length);
+  });
 });

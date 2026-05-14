@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as YAML from 'yaml';
 import { refreshDeps } from '../../src/refresh';
 import { silentLogger } from '../../src/logger';
@@ -66,6 +68,37 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       const lodashOverride = parsed.overrides?.['lodash'];
       expect(lodashOverride ?? null).toBeNull();
     });
+
+    it('REQ-INT-PNPM10-002: non-catalog vulnerable dep has member package.json floor raised, not promoted to catalog', async () => {
+      ws = setupRealWorkspace('v10-non-catalog-vuln');
+
+      const result = await refreshDeps({
+        path: ws.root,
+        force: true,
+        logger: silentLogger,
+        summary: false,
+      });
+
+      expect(result.canceled).toBe(false);
+
+      const yamlText = ws.readWorkspaceYaml();
+      const parsed = YAML.parse(yamlText) as {
+        catalog?: Record<string, string>;
+        overrides?: Record<string, string>;
+      };
+
+      // lodash is NOT in the catalog, so it should NOT appear there after the run.
+      expect(parsed.catalog?.['lodash']).toBeUndefined();
+
+      // The member package.json floor should be raised to >= 4.17.21 directly.
+      // (Exact-pinned deps are fixed at the package.json level by raising the
+      // declared floor rather than adding a transient workspace override.)
+      const appPkgText = fs.readFileSync(path.join(ws.root, 'apps', 'app', 'package.json'), 'utf8');
+      const appPkg = JSON.parse(appPkgText) as { dependencies?: Record<string, string> };
+      const lodashVersion = appPkg.dependencies?.['lodash'];
+      expect(lodashVersion).toBeDefined();
+      expect(compareSemver(String(lodashVersion), '4.17.21')).toBeGreaterThanOrEqual(0);
+    });
   });
 
   describe.skipIf(hasMajorMismatch || localMajor !== 11)('pnpm 11', () => {
@@ -94,6 +127,32 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       // The user's original minimumReleaseAge must be preserved exactly.
       expect(parsed.minimumReleaseAge).toBe(720);
       expect(yamlText).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
+    });
+
+    it('REQ-INT-PNPM11-003: --ignore-workspace migrates audit overrides to package.json pnpm.overrides', async () => {
+      ws = setupRealWorkspace('v11-ignore-workspace');
+
+      const result = await refreshDeps({
+        path: ws.root,
+        force: true,
+        logger: silentLogger,
+        summary: false,
+        ignoreWorkspace: true,
+      });
+
+      expect(result.canceled).toBe(false);
+
+      const pkgText = fs.readFileSync(path.join(ws.root, 'package.json'), 'utf8');
+      const pkg = JSON.parse(pkgText) as { pnpm?: { overrides?: Record<string, string> } };
+
+      // pnpm.overrides must exist and contain a lodash entry above the vulnerable range.
+      expect(pkg.pnpm?.overrides).toBeDefined();
+      const overrides = pkg.pnpm!.overrides!;
+      const lodashEntry = Object.entries(overrides).find(
+        ([k]) => k === 'lodash' || k.startsWith('lodash@'),
+      );
+      expect(lodashEntry).toBeDefined();
+      expect(compareSemver(String(lodashEntry![1]), '4.17.21')).toBeGreaterThanOrEqual(0);
     });
   });
 });

@@ -1,6 +1,11 @@
 import * as path from 'node:path';
 import { consoleLogger, type Logger } from './logger';
-import { WorkspaceState, detectWorkspacePnpmMajor } from './workspace';
+import {
+  WorkspaceState,
+  detectWorkspacePnpmMajor,
+  readAuditIgnoreList,
+  readAuditLevel,
+} from './workspace';
 import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor, type PnpmRunner } from './pnpm';
 import { mergeMinimumReleaseAgeExclude } from './workspaceYamlPnpm11';
 import {
@@ -344,8 +349,18 @@ async function captureInitialState(
   if (!opts.skipAudit && !opts.dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
-      preCleanupAuditRaw = stdout;
       initialAdvisories = extractAdvisories(stdout);
+      // Only retain the pre-cleanup snapshot when it is a valid audit response
+      // (contains an `advisories` key).  pnpm returns {"error":{...}} when there
+      // is no lockfile yet; that error string must not shadow the post-install
+      // audit that `runAuditPhase` captures for `getDirectDepPackageJsonBumps`.
+      try {
+        if ((JSON.parse(stdout) as { advisories?: unknown }).advisories !== undefined) {
+          preCleanupAuditRaw = stdout;
+        }
+      } catch {
+        // stdout is not JSON — leave preCleanupAuditRaw empty
+      }
     } catch {
       // Best-effort: a missing lockfile or other audit failure leaves the
       // initial set empty rather than aborting the whole run.
@@ -484,9 +499,14 @@ async function preAuditCatalogBump(
   preCleanupAuditRaw: string,
 ): Promise<PackageJsonDepChange[]> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
+
+  const ignoredAdvisoryIds = readAuditIgnoreList(state.desiredWorkspaceYaml);
+  const minSeverity = readAuditLevel(state.desiredWorkspaceYaml) ?? undefined;
+
   const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
     allowMajor,
     auditJsonStdout,
+    ignoredAdvisoryIds: ignoredAdvisoryIds.size > 0 ? ignoredAdvisoryIds : undefined,
   });
   // For package.json ranged deps (^/~), the post-cleanup install may resolve
   // to a safe-in-range version that makes the advisory disappear from the
@@ -497,6 +517,8 @@ async function preAuditCatalogBump(
   const pkgJsonBumps = await getDirectDepPackageJsonBumps(state, pnpm, logger, {
     allowMajor,
     auditJsonStdout: pkgJsonAuditStdout,
+    ignoredAdvisoryIds: ignoredAdvisoryIds.size > 0 ? ignoredAdvisoryIds : undefined,
+    minSeverity,
   });
 
   logger.step('Reinstall dependencies after catalog updates');

@@ -20,28 +20,45 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 
 ## CORE — refresh orchestration
 
-- **REQ-CORE-001** — `refreshDeps` SHALL execute the documented 11-step flow
-  (cleanup → install → audit → promote → install) in order.
+- **REQ-CORE-001** — `refreshDeps` SHALL execute the following phases in order:
+  (1) cleanup (lock file removal, `node_modules` removal, override stripping);
+  (2) initial install and optional deduplication;
+  (3) catalog bump from direct-dep advisories and reinstall;
+  (4) audit fix and override promotion;
+  (5) final reinstall and optional deduplication.
+  Each phase SHALL complete before the next begins.
+  _Note: the implementation exposes 11 numbered progress steps across these phases; the step count is non-normative._
 - **REQ-CORE-002** — When `dryRun` is true, `refreshDeps` SHALL NOT mutate
   any file on disk and SHALL NOT invoke the real `pnpm` binary.
 - **REQ-CORE-003** — `refreshDeps` SHALL re-apply the desired
-  `pnpm-workspace.yaml` snapshot after every `pnpm` invocation, because
-  pnpm 10 normalizes the file on install/update.
+  `pnpm-workspace.yaml` snapshot after every `pnpm` invocation.
+  _Rationale: pnpm 10 normalizes the file on install/update (e.g. dropping
+  `savePrefix: ''`); re-applying the snapshot preserves the user's
+  configuration across each invocation._
 - **REQ-CORE-004** — `refreshDeps` SHALL resolve to a `RefreshResult`
   containing `canceled`, `durationMs`, `catalogChanges`, `overrideChanges`,
-  `initialAdvisories`, `finalAdvisories`, `fixedAdvisories`, and `summary`.
-- **REQ-CORE-005** — When `skipAudit` is true, the audit + promotion phase
-  (steps 7–9) SHALL be skipped while cleanup and install steps still run.
+  `pkgJsonDepChanges`, `initialAdvisories`, `finalAdvisories`,
+  `fixedAdvisories`, and `summary`. When `canceled` is `true`, `summary`
+  SHALL be `null`.
+- **REQ-CORE-005** — When `skipAudit` is true, the audit and
+  override-promotion phases SHALL be skipped while cleanup and install
+  phases still run.
 - **REQ-CORE-006** — When `skipDedupe` is true, every `pnpm dedupe`
   invocation SHALL be skipped.
 - **REQ-CORE-007** — Every `pnpm install` invocation issued by
-  `refreshDeps` SHALL include `--no-frozen-lockfile`. The tool
-  intentionally mutates `pnpm-workspace.yaml` (catalog and overrides)
-  between installs, and pnpm 10/11 enable `--frozen-lockfile` by default
-  whenever the `CI` environment variable is set, which would otherwise
-  fail the post-bump install with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`.
-  Outside CI, `--no-frozen-lockfile` is the default behaviour, so the
-  flag is a no-op there.
+  `refreshDeps` SHALL include `--no-frozen-lockfile`.
+  _Rationale: the tool mutates `pnpm-workspace.yaml` (catalog and
+  overrides) between installs; pnpm 10/11 enable `--frozen-lockfile`
+  by default in CI (`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`). The flag
+  is a no-op outside CI._
+- **REQ-CORE-008** — `refreshDeps` SHALL run `pnpm audit --json` before
+  any cleanup or file mutation to capture the initial advisory state.
+  The output of this pre-cleanup audit SHALL be used as the baseline for
+  `initialAdvisories` and for computing direct-dep package.json
+  version-floor raises.
+  _Rationale: after cleanup, existing overrides are stripped; auditing
+  post-cleanup would resurface masked vulnerabilities and inflate the
+  "fixed" count._
 
 ## WORKSPACE — root detection and scope
 
@@ -69,8 +86,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   SHALL be confined to the workspace root and not descend into nested
   unrelated projects.
 - **REQ-WORKSPACE-010** — When `pnpm-workspace.yaml` is created mid-run
-  (e.g. by pnpm 11 under `--ignore-workspace`), `WorkspaceState` SHALL
-  detect it on refresh and adopt it as the desired snapshot.
+  (e.g. by pnpm 11 under `--ignore-workspace`), the tool SHALL detect it
+  and use it as the workspace configuration and desired snapshot for
+  subsequent catalog operations.
 
 ## SAFETY — destructive-action guards
 
@@ -86,8 +104,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   honored.
 - **REQ-SAFETY-005** — A declined confirmation SHALL produce a
   `RefreshResult` with `canceled === true` and SHALL NOT mutate any file.
-- **REQ-SAFETY-006** — Cleanup operations SHALL refuse to delete paths that
-  resolve outside the workspace root (defense-in-depth).
+- **REQ-SAFETY-006** — Cleanup operations SHALL refuse to delete any path
+  that does not have the workspace root as a common ancestor after
+  `path.resolve()` (defense-in-depth path traversal guard).
 
 ## CATALOG — pnpm-workspace.yaml manipulation
 
@@ -106,13 +125,17 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 
 - **REQ-OVERRIDES-001** — `syncAuditOverridesIntoCatalog` SHALL move
   catalog-eligible entries from the workspace `overrides` block into the
-  catalog block.
+  catalog block. A workspace override is catalog-eligible when: (a) its
+  key is a plain package name (no version-range selector), (b) that name
+  exists in the catalog, and (c) its value is a concrete version string.
 - **REQ-OVERRIDES-002** — Transitive-only override entries (qualified
   selectors that do not match a catalog name) SHALL remain in the
   `overrides` block.
 - **REQ-OVERRIDES-003** — `syncPackageJsonOverridesIntoCatalog` SHALL
   promote qualified `pnpm.overrides` entries from `package.json` into the
-  catalog when the qualifier’s range matches the catalog version.
+  catalog when the qualifier's range matches the catalog version and the
+  computed patched minimum is strictly greater than the current catalog
+  version.
 - **REQ-OVERRIDES-004** — Plain (unqualified) `pnpm.overrides` entries
   pinning a catalog package SHALL NOT be promoted (they lack the
   vulnerable-range context to do so safely); the count of skipped entries
@@ -122,12 +145,27 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   `pkg@<=x` siblings written by pnpm 11) into the broadest equivalent
   selector.
 - **REQ-OVERRIDES-006** — Override promotion SHALL never lower a catalog
-  version.
+  version; an override whose resolved version is at or below the current
+  catalog version SHALL be discarded rather than promoted.
+- **REQ-OVERRIDES-007** — A qualified override entry SHALL be discarded
+  after promotion when the final catalog version for that package no longer
+  satisfies the override's version selector (i.e. the override condition
+  can never fire again).
+- **REQ-OVERRIDES-008** — After all `pnpm.overrides` entries are removed
+  from a `package.json`, the now-empty `overrides` key and, if it becomes
+  empty, its parent `pnpm` key SHALL also be removed.
 
 ## AUDIT — direct-dep handling and bump selection
 
 - **REQ-AUDIT-001** — `getDirectDepCatalogBumps` SHALL select the lowest
-  semver that resolves the advisory, preferring patch over minor over major.
+  published, non-prerelease semver version that (a) satisfies the
+  advisory's patched range, (b) is greater than or equal to the currently
+  installed version, and (c) minimises version distance — preferring a
+  patch increment over a minor increment over a major increment. When no
+  published version satisfies the criteria, the minimum of the patched
+  range SHALL be used as a fallback. When a package appears in multiple
+  advisories, the highest per-advisory minimum SHALL be selected so all
+  advisories are simultaneously satisfied.
 - **REQ-AUDIT-002** — When `allowMajor` is false, major-version bumps for
   direct deps SHALL be rejected and the vulnerability SHALL be left for
   override handling.
@@ -144,28 +182,47 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   installed version SHALL be excluded from the bump set.
 - **REQ-AUDIT-008** — Malformed `pnpm audit --json` output SHALL be handled
   without crashing the run; the audit phase SHALL log a warning and proceed.
+- **REQ-AUDIT-009** — Direct dependencies declared with a range prefix
+  (`^`, `~`) in `package.json` SHALL only have their version floor raised
+  when the advisory severity meets or exceeds the effective minimum threshold
+  (see REQ-AUDIT-012; default is `high`). Exact-pinned direct dependencies
+  SHALL be bumped for any advisory severity.
+- **REQ-AUDIT-010** — Prerelease versions SHALL be excluded from the set of
+  candidate bump versions when resolving a patched semver range.
+- **REQ-AUDIT-011** — The tool SHALL read `auditConfig.ignoreGhsas` (pnpm 11)
+  and `auditConfig.ignoreCves` (pnpm 10) from `pnpm-workspace.yaml`. Any
+  advisory whose `github_advisory_id` matches an entry in `ignoreGhsas`, or
+  whose `cves` list intersects with `ignoreCves`, SHALL be excluded from all
+  direct-dep bump decisions (both catalog and `package.json` bumps).
+- **REQ-AUDIT-012** — The tool SHALL read the top-level `auditLevel` key from
+  `pnpm-workspace.yaml` and use its value as the effective minimum severity
+  threshold for ranged-dep bump decisions (superseding the hard-coded `high`
+  default from REQ-AUDIT-009). Valid values are `info`, `low`, `moderate`,
+  `high`, and `critical`. When `auditLevel` is absent the default of `high`
+  SHALL be preserved.
 
 ## PNPM10 — pnpm 10 specific behavior
 
 - **REQ-PNPM10-001** — When the target workspace pins pnpm 10, the tool
   SHALL invoke `pnpm audit --fix` (without the `override` argument).
 - **REQ-PNPM10-002** — On pnpm 10, the tool SHALL re-apply the desired
-  `pnpm-workspace.yaml` after each install/audit because pnpm 10 normalizes
-  the file (e.g. dropping `savePrefix: ''`).
+  `pnpm-workspace.yaml` after each install/audit invocation.
+  _Rationale: pnpm 10 normalizes the file on write (e.g. dropping
+  `savePrefix: ''`)._
 
 ## PNPM11 — pnpm 11 specific behavior
 
 - **REQ-PNPM11-001** — When the target workspace pins pnpm 11, the tool
   SHALL invoke `pnpm audit --fix override`.
-- **REQ-PNPM11-002** — (deprecated — superseded by REQ-PNPM11-009/010)
+- **REQ-PNPM11-002** _(deprecated — superseded by REQ-PNPM11-009/010.
   Previously: `forceMinimumReleaseAgeZero` temporarily set
   `minimumReleaseAge: 0` in `pnpm-workspace.yaml` for the duration of the
   run. Removed because zeroing the global gate defeats supply-chain
-  hygiene and risked leaking when the process was killed mid-run.
-- **REQ-PNPM11-003** — (deprecated — superseded by REQ-PNPM11-009/010)
-  Previously: `restoreMinimumReleaseAge` restored the user’s original
+  hygiene and risked leaking when the process was killed mid-run.)_
+- **REQ-PNPM11-003** _(deprecated — superseded by REQ-PNPM11-009/010.
+  Previously: `restoreMinimumReleaseAge` restored the user's original
   `minimumReleaseAge` value before the tool exited. No longer needed once
-  the tool stops mutating the global value (REQ-PNPM11-010).
+  the tool stops mutating the global value (REQ-PNPM11-010).)_
 - **REQ-PNPM11-004** — `mergeMinimumReleaseAgeExclude` SHALL merge any
   `minimumReleaseAgeExclude` entries pnpm 11 writes during
   `pnpm audit --fix` back into the file.
@@ -180,13 +237,14 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   every `pnpm` invocation when set.
 - **REQ-PNPM11-009** — When the target workspace pins pnpm 11 and the
   pre-cleanup `pnpm audit --json` reports advisories, the tool SHALL
-  extract the minimum patched version of each advisory and merge those
-  entries into the top-level `minimumReleaseAgeExclude` block of
-  `pnpm-workspace.yaml` before running `pnpm audit --fix`, so the
-  patched versions can be installed even when published less than
-  `minimumReleaseAge` ago. Targeted exclusion replaces the deprecated
-  global zeroing (REQ-PNPM11-002/003) and preserves supply-chain hygiene
-  for every other package.
+  extract the minimum patched version of each advisory — taking the
+  highest minimum when a package appears in multiple advisories — and
+  merge those entries into the top-level `minimumReleaseAgeExclude` block
+  of `pnpm-workspace.yaml` before running `pnpm audit --fix`.
+  _Rationale: targeted per-package exclusion allows patched versions
+  published less than `minimumReleaseAge` ago to be installed while
+  preserving the release-age gate for all other packages. This supersedes
+  the deprecated global zeroing (REQ-PNPM11-002/003)._
 - **REQ-PNPM11-010** — The tool SHALL NOT modify the top-level
   `minimumReleaseAge` value in `pnpm-workspace.yaml`. The user’s
   configured release-age gate is preserved verbatim across the run.
@@ -204,10 +262,14 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   workspace root; paths resolving outside SHALL be silently skipped.
 - **REQ-SUMMARY-005** — In `--dry-run`, `--summary-file` SHALL NOT write a
   file on disk.
-- **REQ-SUMMARY-006** — `RefreshResult.summary` SHALL contain the full
-  structured `RunSummaryData` regardless of the `summary` rendering flag.
+- **REQ-SUMMARY-006** — When the run completes normally (not canceled),
+  `RefreshResult.summary` SHALL contain the full structured `RunSummaryData`
+  regardless of the `summary` rendering flag.
 - **REQ-SUMMARY-007** — Failure to write the summary file SHALL NOT abort
   the run; the error SHALL be logged as a warning.
+- **REQ-SUMMARY-008** — When the workspace root `package.json` contains a
+  `name` field, the terminal summary SHALL display it as the run heading.
+  When `name` is absent, a generic heading SHALL be used.
 
 ## CLI — command-line interface
 
@@ -225,22 +287,26 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-CLI-009** — `--no-allow-major` SHALL disable major-version bump
   handling (the default is to allow major bumps and log a warning).
 - **REQ-CLI-010** — `--no-summary` SHALL suppress the terminal summary.
-- **REQ-CLI-011** — `--summary-file <path>` SHALL forward to
-  `summaryFile`.
+- **REQ-CLI-011** — `--summary-file <path>` SHALL forward to `summaryFile`.
+  An empty or whitespace-only value SHALL cause the CLI to exit 1 before
+  running. A relative path SHALL be resolved against the workspace root
+  (the `--path` value), not `process.cwd()`.
 - **REQ-CLI-012** — `--ignore-workspace` SHALL forward to
   `ignoreWorkspace`.
 - **REQ-CLI-013** — `-v, --verbose` SHALL switch the logger to verbose.
 - **REQ-CLI-014** — `-q, --quiet` SHALL switch the logger to quiet.
-- **REQ-CLI-015** — A successful run SHALL exit 0; a thrown
+- **REQ-CLI-015** — A successful run SHALL exit 0. A user-canceled run
+  (confirmation declined) SHALL exit 0. A thrown
   `WorkspaceNotFoundError`, `EnclosingWorkspaceError`,
   `NonInteractiveConfirmationError`, `PnpmNotInstalledError`, or
-  `PnpmCommandFailedError` SHALL exit non-zero with the error message on
-  stderr.
+  `PnpmCommandFailedError` SHALL exit 1 with the error message on stderr.
 
 ## LOGGING — log levels and formatting
 
 - **REQ-LOGGING-001** — `silent` level SHALL emit no output.
-- **REQ-LOGGING-002** — `quiet` level SHALL emit only warnings and errors.
+- **REQ-LOGGING-002** — `quiet` level SHALL suppress step progress,
+  detail, bullet, raw, and trace output; warnings, informational notices,
+  and success messages SHALL remain visible.
 - **REQ-LOGGING-003** — `normal` level (default) SHALL emit phases,
   actions, and outcomes (no raw pnpm output).
 - **REQ-LOGGING-004** — `verbose` level SHALL include raw pnpm command
@@ -250,6 +316,8 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   summary file.
 - **REQ-LOGGING-006** — Progress logging SHALL emit numbered step lines
   (`Step N/M — ...`) wrapping the underlying logger.
+- **REQ-LOGGING-007** — When both `--verbose` and `--quiet` are supplied,
+  the last flag encountered in the argument list SHALL take precedence.
 
 ## PORTABILITY — cross-platform behavior
 
@@ -261,6 +329,10 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   style (`\r\n` vs `\n`).
 - **REQ-PORTABILITY-004** _(deprecated — path comparisons rely on Node.js
   platform-native semantics; no explicit case-folding is performed.)_
+- **REQ-PORTABILITY-005** — When `syncPackageJsonOverridesIntoCatalog`
+  rewrites the body of the `overrides` object, the closing `}` SHALL use
+  the same indentation as it had in the original file (2-space, 4-space,
+  or tab-based).
 
 ## ERRORS — typed error contract
 
@@ -304,11 +376,23 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   non-zero exit from `PnpmRunner.run`, SHALL attach the captured tail to
   the thrown `PnpmCommandFailedError` (see REQ-ERRORS-004). pnpm often
   emits `ERR_PNPM_*` diagnostics on stdout, so both streams are merged.
-- **REQ-RUNNER-009** — `PnpmRunner.run` SHALL retry a failing `pnpm
-install` invocation up to `installRetries` additional times (default
-  `1`, total of 2 attempts). Each retry SHALL emit a warning through the
-  injected logger. Non-`install` commands and `runAllowFail` SHALL NOT
-  be retried.
+- **REQ-RUNNER-009** — `PnpmRunner.run` SHALL retry a failing `install`
+  subcommand up to `installRetries` additional times (default `1`, total
+  of 2 attempts). Each retry SHALL emit a warning through the injected
+  logger. Non-`install` subcommands and `runAllowFail` invocations SHALL
+  NOT be retried.
+- **REQ-RUNNER-010** — When the workspace root `package.json` declares a
+  `packageManager` or `devEngines.packageManager` field specifying a pnpm
+  version, that declared version SHALL be used as the authoritative pnpm
+  major version. The version reported by `pnpm --version` on PATH SHALL
+  only be used when neither field is present.
+
+## INVARIANT — idempotency
+
+- **REQ-INVARIANT-001** — A second invocation on a workspace where all
+  advisories are already resolved and the catalog is up to date SHALL
+  produce empty `catalogChanges`, `overrideChanges`, and
+  `pkgJsonDepChanges`.
 
 ## INTEGRATION — end-to-end scenarios (real pnpm)
 
@@ -318,10 +402,18 @@ real pnpm 10 and pnpm 11 binaries.
 - **REQ-INT-PNPM10-001** — Against a pnpm 10 workspace with a vulnerable
   direct catalog dep, the catalog version SHALL be bumped and no override
   SHALL remain for that package.
-- **REQ-INT-PNPM10-002** _(future — transitive-vulnerability fixture not yet shipped; tracked for follow-up.)_
+- **REQ-INT-PNPM10-002** — Against a pnpm 10 workspace where a vulnerable
+  package is an exact-pinned direct dependency of a member package but is
+  **not** listed in the workspace catalog, `refreshDeps` SHALL raise the
+  declared version floor in the member's `package.json` to a safe version
+  and SHALL NOT create a catalog entry for it.
 - **REQ-INT-PNPM11-001** — Against a pnpm 11 workspace with a vulnerable
   direct catalog dep, the catalog SHALL be bumped, the override SHALL be
-  promoted, and the user’s original `minimumReleaseAge` SHALL be restored
+  promoted, and the user's original `minimumReleaseAge` SHALL be restored
   in the final `pnpm-workspace.yaml` (no `minimumReleaseAge: 0` leak).
 - **REQ-INT-PNPM11-002** _(future — multi-selector overrides fixture not yet shipped; tracked for follow-up.)_
-- **REQ-INT-PNPM11-003** _(future — ignore-workspace fixture not yet shipped; tracked for follow-up.)_
+- **REQ-INT-PNPM11-003** — Against a pnpm 11 workspace that has no
+  `pnpm-workspace.yaml` and is run with `ignoreWorkspace: true`, `refreshDeps`
+  SHALL migrate the overrides written by `pnpm audit --fix` into the root
+  `package.json`'s `pnpm.overrides` block so that the subsequent install
+  picks them up.

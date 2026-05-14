@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { extractMinimumPatchedVersions } from '../../src/audit/parseAdvisories';
+import {
+  extractMinimumPatchedVersions,
+  advisoryMatchesIgnoreList,
+} from '../../src/audit/parseAdvisories';
 
 function makeAuditJson(advisories: Array<{ id: string; module: string; patched: string }>): string {
   const map: Record<string, { module_name: string; patched_versions: string }> = {};
@@ -55,5 +58,72 @@ describe('extractMinimumPatchedVersions', () => {
       makeAuditJson([{ id: '1', module: 'vite', patched: '>=5.4.6 <6.0.0 || >=6.0.1' }]),
     );
     expect(out.get('vite')).toBe('5.4.6');
+  });
+});
+
+describe('advisoryMatchesIgnoreList', () => {
+  it('REQ-AUDIT-011: returns false when ignoredIds is empty', () => {
+    expect(advisoryMatchesIgnoreList({}, new Set())).toBe(false);
+  });
+
+  it('REQ-AUDIT-011: returns false when advisory has no identifiers', () => {
+    expect(advisoryMatchesIgnoreList({}, new Set(['GHSA-aaaa-bbbb-cccc']))).toBe(false);
+  });
+
+  it('REQ-AUDIT-011: matches by github_advisory_id', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { github_advisory_id: 'GHSA-aaaa-bbbb-cccc' },
+        new Set(['GHSA-aaaa-bbbb-cccc']),
+      ),
+    ).toBe(true);
+  });
+
+  it('REQ-AUDIT-011: does not match a different github_advisory_id', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { github_advisory_id: 'GHSA-aaaa-bbbb-cccc' },
+        new Set(['GHSA-1111-2222-3333']),
+      ),
+    ).toBe(false);
+  });
+
+  it('REQ-AUDIT-011: matches GHSA ID extracted from advisory url', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc' },
+        new Set(['GHSA-aaaa-bbbb-cccc']),
+      ),
+    ).toBe(true);
+  });
+
+  it('REQ-AUDIT-011: does not match when url GHSA differs from ignore list', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc' },
+        new Set(['GHSA-1111-2222-3333']),
+      ),
+    ).toBe(false);
+  });
+
+  it('REQ-AUDIT-011: matches by CVE in cves array', () => {
+    expect(
+      advisoryMatchesIgnoreList({ cves: ['CVE-2021-12345'] }, new Set(['CVE-2021-12345'])),
+    ).toBe(true);
+  });
+
+  it('REQ-AUDIT-011: does not match when no CVE in ignore list', () => {
+    expect(
+      advisoryMatchesIgnoreList({ cves: ['CVE-2021-12345'] }, new Set(['CVE-2099-99999'])),
+    ).toBe(false);
+  });
+
+  it('REQ-AUDIT-011: case-insensitively matches GHSA from url', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { url: 'https://github.com/advisories/ghsa-aaaa-bbbb-cccc' },
+        new Set(['GHSA-aaaa-bbbb-cccc']),
+      ),
+    ).toBe(true);
   });
 });

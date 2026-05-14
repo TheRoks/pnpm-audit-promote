@@ -14,6 +14,7 @@
  *   node scripts/check-traceability.mjs --strict  # fail on gaps (CI gate)
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,6 +155,14 @@ function main() {
 
   mkdirSync(join(repoRoot, 'docs'), { recursive: true });
   writeFileSync(outputFile, lines.join('\n'), 'utf8');
+  try {
+    execFileSync('pnpm', ['exec', 'prettier', '--write', outputFile], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+    });
+  } catch {
+    // Prettier unavailable or failed — leave the file as-is.
+  }
   console.log(`Wrote ${relPath(outputFile)} (${covered}/${totalReqs} covered).`);
 
   if (uncovered > 0) {

@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "node .github/hooks/destructive-guard.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}

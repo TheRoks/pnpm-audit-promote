@@ -7,6 +7,8 @@ import {
   WorkspaceState,
   detectWorkspacePnpmMajor,
   resolveWorkspacePackageDirs,
+  readAuditIgnoreList,
+  readAuditLevel,
 } from '../src/workspace';
 
 let tmp: string;
@@ -496,5 +498,95 @@ describe('detectWorkspacePnpmMajor', () => {
   it('REQ-WORKSPACE-006: returns null when neither field is declared', () => {
     const p = write({ name: 'x' });
     expect(detectWorkspacePnpmMajor(p)).toBeNull();
+  });
+});
+
+describe('readAuditIgnoreList', () => {
+  it('REQ-AUDIT-011: returns empty set for empty content', () => {
+    expect(readAuditIgnoreList('').size).toBe(0);
+    expect(readAuditIgnoreList('   ').size).toBe(0);
+  });
+
+  it('REQ-AUDIT-011: returns empty set when auditConfig is absent', () => {
+    expect(readAuditIgnoreList('packages:\n  - apps/*\n').size).toBe(0);
+  });
+
+  it('REQ-AUDIT-011: collects GHSA IDs from ignoreGhsas', () => {
+    const yaml = [
+      'packages:',
+      '  - apps/*',
+      'auditConfig:',
+      '  ignoreGhsas:',
+      '    - GHSA-1234-5678-abcd',
+      '    - GHSA-abcd-1234-efgh',
+    ].join('\n');
+    const ids = readAuditIgnoreList(yaml);
+    expect(ids.has('GHSA-1234-5678-abcd')).toBe(true);
+    expect(ids.has('GHSA-abcd-1234-efgh')).toBe(true);
+    expect(ids.size).toBe(2);
+  });
+
+  it('REQ-AUDIT-011: collects CVE IDs from ignoreCves', () => {
+    const yaml = ['auditConfig:', '  ignoreCves:', '    - CVE-2021-12345'].join('\n');
+    const ids = readAuditIgnoreList(yaml);
+    expect(ids.has('CVE-2021-12345')).toBe(true);
+    expect(ids.size).toBe(1);
+  });
+
+  it('REQ-AUDIT-011: merges both ignoreGhsas and ignoreCves into a single set', () => {
+    const yaml = [
+      'auditConfig:',
+      '  ignoreGhsas:',
+      '    - GHSA-aaaa-bbbb-cccc',
+      '  ignoreCves:',
+      '    - CVE-2022-99999',
+    ].join('\n');
+    const ids = readAuditIgnoreList(yaml);
+    expect(ids.has('GHSA-aaaa-bbbb-cccc')).toBe(true);
+    expect(ids.has('CVE-2022-99999')).toBe(true);
+    expect(ids.size).toBe(2);
+  });
+
+  it('REQ-AUDIT-011: returns empty set for malformed YAML', () => {
+    expect(readAuditIgnoreList(': bad: yaml: [')).toEqual(new Set());
+  });
+
+  it('REQ-AUDIT-011: ignores non-string entries in the lists', () => {
+    const yaml = [
+      'auditConfig:',
+      '  ignoreGhsas:',
+      '    - GHSA-valid-0000-0000',
+      '    - 12345',
+      '    - null',
+    ].join('\n');
+    const ids = readAuditIgnoreList(yaml);
+    expect(ids.has('GHSA-valid-0000-0000')).toBe(true);
+    expect(ids.size).toBe(1);
+  });
+});
+
+describe('readAuditLevel', () => {
+  it('REQ-AUDIT-012: returns null for empty content', () => {
+    expect(readAuditLevel('')).toBeNull();
+    expect(readAuditLevel('   ')).toBeNull();
+  });
+
+  it('REQ-AUDIT-012: returns null when auditLevel is absent', () => {
+    expect(readAuditLevel('packages:\n  - apps/*\n')).toBeNull();
+  });
+
+  it('REQ-AUDIT-012: returns the auditLevel string value', () => {
+    expect(readAuditLevel('auditLevel: moderate\n')).toBe('moderate');
+    expect(readAuditLevel('auditLevel: critical\n')).toBe('critical');
+    expect(readAuditLevel('auditLevel: low\n')).toBe('low');
+  });
+
+  it('REQ-AUDIT-012: returns null for non-string auditLevel value', () => {
+    expect(readAuditLevel('auditLevel: 42\n')).toBeNull();
+    expect(readAuditLevel('auditLevel: true\n')).toBeNull();
+  });
+
+  it('REQ-AUDIT-012: returns null for malformed YAML', () => {
+    expect(readAuditLevel(': bad: yaml: [')).toBeNull();
   });
 });

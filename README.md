@@ -40,7 +40,7 @@ Requires Node.js >= 22 and `pnpm` (10 or 11) available on `PATH`.
 
 `pnpm-audit-promote` runs against both pnpm 10 and pnpm 11 workspaces. When it detects pnpm 11 it makes two adjustments for the duration of the run:
 
-- Temporarily sets `minimumReleaseAge: 0` in `pnpm-workspace.yaml` so freshly-published patch releases are not gated by pnpm 11's new 1-day default. Your original value (or absence of the key) is restored before the tool exits.
+- Pre-seeds the specific vulnerable packages into `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` so freshly-published advisory-fix versions are not blocked by pnpm 11's default 24-hour release-age gate — while leaving the global `minimumReleaseAge` setting intact for all other packages.
 - Merges any `minimumReleaseAgeExclude` entries pnpm 11 writes during `pnpm audit --fix` back into the file, so the security excludes are preserved across the catalog-restoration step.
 
 `pnpm.overrides` defined in `package.json` are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
@@ -188,6 +188,7 @@ console.log(`Fixed ${result.fixedAdvisories.length} vulnerabilities in ${result.
 `renderTerminalSummary`, `RenderOptions`,
 `AdvisorySummary`, `CatalogChange`, `OverrideChange`, `RunSummaryData`, `Severity`,
 `ConfirmFn`, `ConfirmContext`,
+`PKG_VERSION`,
 and the typed errors
 `WorkspaceNotFoundError`, `EnclosingWorkspaceError`, `PnpmNotInstalledError`, `PnpmCommandFailedError`, `NonInteractiveConfirmationError`.
 
@@ -195,8 +196,9 @@ The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` imp
 
 ## Limitations
 
-- The YAML and JSON edits are regex-based to preserve formatting bit-for-bit;
-  unusual constructs (YAML anchors, custom comments inside the catalog block)
+- YAML edits are line-oriented (regex-based) to preserve formatting bit-for-bit;
+  JSON edits use `jsonc-parser` for minimal, structure-aware changes.
+  Unusual constructs (YAML anchors, custom comments inside the catalog block)
   are not deeply parsed.
 - Only the root `package.json`'s `pnpm.overrides` is promoted into the catalog.
 - `pnpm` must be available on `PATH`. The tool does not bundle pnpm.

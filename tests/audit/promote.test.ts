@@ -220,6 +220,69 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
     expect(out).toBe(yaml);
   });
+
+  it('REQ-PORTABILITY-005: preserves 4-space indentation of overrides closing brace', () => {
+    // A 4-space-indented monorepo package.json has `pnpm.overrides` at nesting
+    // depth 2, so the closing `}` of the overrides object should sit at 8 spaces.
+    // The bug wrote only 2 spaces (hardcoded) regardless of the file's style.
+    // We need a promotion to happen so the file is actually rewritten (otherwise
+    // the function returns early and the original file is kept intact).
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: {
+          overrides: {
+            // Catalog-eligible: react@<=18.2.0 satisfies the range → promoted, forcing a write.
+            'react@<=18.2.0': '>=18.3.1',
+            // Non-catalog: vite stays as residual override.
+            'vite@<=6.4.1': '>=6.4.2',
+          },
+        },
+      },
+      null,
+      4, // ← 4-space indentation
+    );
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+
+    const newPkg = fs.readFileSync(path.join(tmp, 'package.json'), 'utf8');
+    // Entry line has 12-space indent (3 levels × 4 spaces).
+    expect(newPkg).toContain('\n            "vite@<=6.4.1"');
+    // Closing `}` of overrides block must keep its original 8-space indent.
+    expect(newPkg).toContain('\n        }');
+    // Sanity: the JSON must still be valid with the correct structure.
+    const parsed = JSON.parse(newPkg) as { pnpm?: { overrides?: Record<string, string> } };
+    expect(parsed.pnpm?.overrides?.['vite@<=6.4.1']).toBe('>=6.4.2');
+  });
+
+  it('REQ-PORTABILITY-005: preserves tab indentation of overrides closing brace', () => {
+    // Hand-crafted tab-indented package.json. The `overrides` key sits at
+    // depth 2, so its closing `}` must use 2 tabs (\t\t).
+    // A catalog-eligible entry forces the write path to be taken.
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = [
+      '{',
+      '\t"name": "root",',
+      '\t"pnpm": {',
+      '\t\t"overrides": {',
+      '\t\t\t"react@<=18.2.0": ">=18.3.1",',
+      '\t\t\t"vite@<=6.4.1": ">=6.4.2"',
+      '\t\t}',
+      '\t}',
+      '}',
+      '',
+    ].join('\n');
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+
+    const newPkg = fs.readFileSync(path.join(tmp, 'package.json'), 'utf8');
+    // Closing `}` of overrides block must use 2 tabs.
+    expect(newPkg).toContain('\n\t\t}');
+    // Sanity: the JSON must still be valid with the correct structure.
+    const parsed = JSON.parse(newPkg) as { pnpm?: { overrides?: Record<string, string> } };
+    expect(parsed.pnpm?.overrides?.['vite@<=6.4.1']).toBe('>=6.4.2');
+  });
 });
 
 describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
@@ -243,6 +306,25 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
     expect(out).toContain("vite: '6.4.3'");
     expect(out).not.toContain('overrides:');
+  });
+
+  it('REQ-OVERRIDES-006: plain override below current catalog version is discarded (no downgrade)', () => {
+    // Override proposes 6.2.0 but catalog already pins 6.3.5 — must not regress.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.2.0'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.3.5'"); // catalog version unchanged
+    expect(out).not.toContain("vite: '6.2.0'");
+  });
+
+  it('REQ-OVERRIDES-006: plain override equal to current catalog version is discarded (redundant)', () => {
+    // Override matches the catalog exactly — no-op, no overrides block.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.3.5'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.3.5'"); // catalog unchanged
+    // The redundant override should be removed (not promoted, not kept)
+    expect(out.indexOf("vite: '6.3.5'")).toBe(out.lastIndexOf("vite: '6.3.5'")); // only one occurrence
   });
 
   it('REQ-OVERRIDES-002: keeps a qualified override when the catalog version does not satisfy its selector', () => {
@@ -384,5 +466,35 @@ describe('cross-major warning', () => {
     };
     syncAuditOverridesIntoCatalog(state, logger);
     expect(warnings).toEqual([]);
+  });
+
+  it('REQ-OVERRIDES-007: qualified override is discarded after promotion when catalog version no longer satisfies its selector', () => {
+    // vite@<=6.4.1 is promoted: catalog bumps from 6.3.5 → 6.4.2.
+    // The final catalog 6.4.2 does NOT satisfy <=6.4.1, so the override is discarded.
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("vite: '6.4.2'");
+    expect(out).not.toContain('vite@<=6.4.1');
+    expect(out).not.toContain('overrides:');
+  });
+
+  it('REQ-OVERRIDES-008: after all pnpm.overrides are removed, the empty overrides and pnpm keys are also removed', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: { overrides: { 'vite@<=6.4.1': '>=6.4.2' } },
+      },
+      null,
+      2,
+    );
+    const state = writeWorkspace(yaml, pkg);
+    syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    const newPkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: unknown;
+    };
+    // Both `overrides` and the parent `pnpm` key must be gone.
+    expect(newPkg.pnpm).toBeUndefined();
   });
 });

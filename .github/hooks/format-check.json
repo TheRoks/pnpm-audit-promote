@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "bash .github/hooks/format-check.sh",
+        "timeout": 30
+      }
+    ]
+  }
+}

@@ -16,6 +16,9 @@ interface PnpmAuditAdvisory {
   patched_versions?: string;
   vulnerable_versions?: string;
   findings?: Array<{ paths?: string[] }>;
+  github_advisory_id?: string;
+  cves?: string[];
+  url?: string;
 }
 
 interface PnpmAuditOutput {
@@ -38,6 +41,11 @@ export interface DirectDepBumpOptions {
    * running audit twice.
    */
   auditJsonStdout?: string;
+  /**
+   * Set of GHSA or CVE identifiers that should be ignored. Any advisory
+   * matching one of these IDs is excluded from bump decisions.
+   */
+  ignoredAdvisoryIds?: ReadonlySet<string>;
 }
 
 /**
@@ -113,6 +121,11 @@ export async function getDirectDepCatalogBumps(
   for (const adv of Object.values(audit.advisories)) {
     const module = adv.module_name ?? '';
     if (!catalogNames.has(module)) continue;
+
+    if (options.ignoredAdvisoryIds && advisoryMatchesIgnoreList(adv, options.ignoredAdvisoryIds)) {
+      logger.detail(`Skipped ignored advisory for ${module}.`);
+      continue;
+    }
 
     const current = catalogVersions.get(module);
     if (!advisoryAppliesToCurrent(current, adv.vulnerable_versions)) {
@@ -222,6 +235,38 @@ function classifyTier(from: string, to: string): BumpTier | null {
   if (semver.major(b) > semver.major(a)) return 'major';
   if (semver.minor(b) > semver.minor(a)) return 'minor';
   return 'patch';
+}
+
+/**
+ * Returns `true` when the advisory matches any ID in the ignore list.
+ *
+ * Matching rules:
+ *  - `adv.github_advisory_id` is compared directly against `ignoredIds`.
+ *  - The last path segment of `adv.url` matching `GHSA-*` is extracted and
+ *    compared (handles advisories that embed the GHSA ID only in the URL).
+ *  - Each entry in `adv.cves` is compared directly against `ignoredIds`.
+ */
+export function advisoryMatchesIgnoreList(
+  adv: { github_advisory_id?: string; cves?: string[]; url?: string },
+  ignoredIds: ReadonlySet<string>,
+): boolean {
+  if (ignoredIds.size === 0) return false;
+  if (adv.github_advisory_id && ignoredIds.has(adv.github_advisory_id)) return true;
+  if (adv.url) {
+    const m = /\/(GHSA-[a-z0-9-]+)$/i.exec(adv.url);
+    if (m?.[1]) {
+      const ghsaFromUrl = m[1].toLowerCase();
+      for (const id of ignoredIds) {
+        if (id.toLowerCase() === ghsaFromUrl) return true;
+      }
+    }
+  }
+  if (Array.isArray(adv.cves)) {
+    for (const cve of adv.cves) {
+      if (typeof cve === 'string' && ignoredIds.has(cve)) return true;
+    }
+  }
+  return false;
 }
 
 /**

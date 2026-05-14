@@ -1,0 +1,14 @@
+{
+  "name": "v11-ignore-workspace-root",
+  "private": true,
+  "version": "0.0.0",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.0.0"
+    }
+  },
+  "dependencies": {
+    "lodash": "4.17.20"
+  }
+}

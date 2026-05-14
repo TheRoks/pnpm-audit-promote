@@ -59,6 +59,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   _Rationale: after cleanup, existing overrides are stripped; auditing
   post-cleanup would resurface masked vulnerabilities and inflate the
   "fixed" count._
+- **REQ-CORE-009** — When the pre-cleanup `pnpm audit --json` invocation
+  throws or exits non-zero, the tool SHALL log a warning and continue
+  with an empty initial advisory baseline instead of aborting the run.
 
 ## WORKSPACE — root detection and scope
 
@@ -120,6 +123,10 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   read both unscoped and scoped (`@scope/name`) entries.
 - **REQ-CATALOG-005** — `collapseBlankLines` SHALL collapse runs of blank
   lines created by edits down to a single blank line.
+- **REQ-CATALOG-006** — When `pnpm-workspace.yaml` exists but cannot be
+  read (e.g. due to a permissions error or corrupt content), the tool
+  SHALL throw a typed error that identifies the file path before any
+  file mutation takes place.
 
 ## OVERRIDES — promotion logic
 
@@ -200,6 +207,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   default from REQ-AUDIT-009). Valid values are `info`, `low`, `moderate`,
   `high`, and `critical`. When `auditLevel` is absent the default of `high`
   SHALL be preserved.
+- **REQ-AUDIT-014** — When no published version satisfies the advisory's
+  patched range, the minimum of the patched range SHALL be used as the
+  bump target.
 
 ## PNPM10 — pnpm 10 specific behavior
 
@@ -393,6 +403,10 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   advisories are already resolved and the catalog is up to date SHALL
   produce empty `catalogChanges`, `overrideChanges`, and
   `pkgJsonDepChanges`.
+- **REQ-INVARIANT-002** — A `--dry-run` invocation SHALL NOT alter the
+  observable state of a subsequent real run: no lock file shall be
+  changed, no workspace yaml mutations shall persist, and no
+  `package.json` modifications shall be written.
 
 ## INTEGRATION — end-to-end scenarios (real pnpm)
 
@@ -417,3 +431,7 @@ real pnpm 10 and pnpm 11 binaries.
   SHALL migrate the overrides written by `pnpm audit --fix` into the root
   `package.json`'s `pnpm.overrides` block so that the subsequent install
   picks them up.
+- **REQ-INT-PNPM11-004** — Against a pnpm 11 workspace whose
+  `pnpm-workspace.yaml` contains a `minimumReleaseAge` setting,
+  `refreshDeps` SHALL NOT zero or otherwise alter that setting during
+  the run.

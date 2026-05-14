@@ -126,4 +126,57 @@ describe('advisoryMatchesIgnoreList', () => {
       ),
     ).toBe(true);
   });
+
+  it('REQ-AUDIT-011: case-insensitively matches github_advisory_id when ignore list uses lowercase', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { github_advisory_id: 'GHSA-aaaa-bbbb-cccc' },
+        new Set(['ghsa-aaaa-bbbb-cccc']),
+      ),
+    ).toBe(true);
+  });
+
+  it('REQ-AUDIT-011: case-insensitively matches github_advisory_id when advisory id is lowercase', () => {
+    expect(
+      advisoryMatchesIgnoreList(
+        { github_advisory_id: 'ghsa-aaaa-bbbb-cccc' },
+        new Set(['GHSA-aaaa-bbbb-cccc']),
+      ),
+    ).toBe(true);
+  });
+
+  it('REQ-AUDIT-011: matches github_advisory_id when no url is present and only direct id check applies', () => {
+    // Ensures the case-insensitive direct-id check works even when adv.url is absent,
+    // covering the gap where a user writes lowercase IDs in ignoreGhsas config.
+    expect(
+      advisoryMatchesIgnoreList(
+        { github_advisory_id: 'GHSA-xxxx-yyyy-zzzz' },
+        new Set(['ghsa-xxxx-yyyy-zzzz']),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('extractMinimumPatchedVersions — malformed input', () => {
+  it('REQ-AUDIT-008: handles non-string module_name (null) without error', () => {
+    const json = JSON.stringify({
+      advisories: { '1': { module_name: null, patched_versions: '>=1.0.0' } },
+    });
+    expect(extractMinimumPatchedVersions(json).size).toBe(0);
+  });
+
+  it('REQ-AUDIT-008: handles non-string module_name (number) without adding junk Map keys', () => {
+    const json = JSON.stringify({
+      advisories: { '1': { module_name: 42, patched_versions: '>=1.0.0' } },
+    });
+    const out = extractMinimumPatchedVersions(json);
+    expect(out.size).toBe(0);
+  });
+
+  it('REQ-AUDIT-008: handles non-string module_name (object) without error', () => {
+    const json = JSON.stringify({
+      advisories: { '1': { module_name: { nested: true }, patched_versions: '>=1.0.0' } },
+    });
+    expect(extractMinimumPatchedVersions(json).size).toBe(0);
+  });
 });

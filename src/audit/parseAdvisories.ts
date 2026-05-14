@@ -251,7 +251,12 @@ export function advisoryMatchesIgnoreList(
   ignoredIds: ReadonlySet<string>,
 ): boolean {
   if (ignoredIds.size === 0) return false;
-  if (adv.github_advisory_id && ignoredIds.has(adv.github_advisory_id)) return true;
+  if (adv.github_advisory_id) {
+    const normalizedId = adv.github_advisory_id.toLowerCase();
+    for (const id of ignoredIds) {
+      if (id.toLowerCase() === normalizedId) return true;
+    }
+  }
   if (adv.url) {
     const m = /\/(GHSA-[a-z0-9-]+)$/i.exec(adv.url);
     if (m?.[1]) {
@@ -296,7 +301,7 @@ export function extractMinimumPatchedVersions(jsonStdout: string): Map<string, s
 
   for (const adv of Object.values(parsed.advisories)) {
     const name = adv.module_name ?? '';
-    if (!name) continue;
+    if (!name || typeof name !== 'string') continue;
     const range = adv.patched_versions ?? '';
     if (!range.trim()) continue;
     let min: string | null;

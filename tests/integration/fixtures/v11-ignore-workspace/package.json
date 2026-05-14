@@ -5,10 +5,11 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "11.0.0"
+      "version": "11.0.0",
+      "onFail": "warn"
     }
   },
   "dependencies": {
-    "lodash": "4.17.20"
+    "lodash": "4.16.x"
   }
 }

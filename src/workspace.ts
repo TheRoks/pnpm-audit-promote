@@ -4,7 +4,7 @@ import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
-import { EnclosingWorkspaceError, WorkspaceNotFoundError } from './errors';
+import { EnclosingWorkspaceError, WorkspaceNotFoundError, WorkspaceReadError } from './errors';
 import { addMinimumReleaseAgeExcludeEntries } from './workspaceYamlPnpm11';
 
 /**
@@ -153,7 +153,11 @@ export class WorkspaceState {
 
   readWorkspaceYaml(): string {
     if (!this.hasWorkspaceYaml) return '';
-    return fs.readFileSync(this.workspaceYaml, 'utf8');
+    try {
+      return fs.readFileSync(this.workspaceYaml, 'utf8');
+    } catch (err) {
+      throw new WorkspaceReadError(this.workspaceYaml, err);
+    }
   }
 
   saveWorkspaceYaml(content: string): void {

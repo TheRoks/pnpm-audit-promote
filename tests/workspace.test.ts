@@ -10,6 +10,7 @@ import {
   readAuditIgnoreList,
   readAuditLevel,
 } from '../src/workspace';
+import { WorkspaceReadError } from '../src/errors';
 
 let tmp: string;
 
@@ -588,5 +589,21 @@ describe('readAuditLevel', () => {
 
   it('REQ-AUDIT-012: returns null for malformed YAML', () => {
     expect(readAuditLevel(': bad: yaml: [')).toBeNull();
+  });
+});
+
+describe('WorkspaceState.readWorkspaceYaml', () => {
+  it('REQ-CATALOG-006: throws WorkspaceReadError when pnpm-workspace.yaml exists but cannot be read', () => {
+    const yamlPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{"name":"root"}', 'utf8');
+    fs.writeFileSync(yamlPath, 'catalog:\n  react: "18.2.0"\n', 'utf8');
+
+    // initialize() sets hasWorkspaceYaml=true and caches the content.
+    const ws = WorkspaceState.initialize(tmp);
+
+    // Delete the file so that the next explicit readWorkspaceYaml() fails.
+    fs.rmSync(yamlPath);
+
+    expect(() => ws.readWorkspaceYaml()).toThrow(WorkspaceReadError);
   });
 });

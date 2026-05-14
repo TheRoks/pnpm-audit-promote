@@ -84,3 +84,16 @@ export class NonInteractiveConfirmationError extends Error {
     this.name = 'NonInteractiveConfirmationError';
   }
 }
+
+/** Thrown when `pnpm-workspace.yaml` exists but cannot be read (e.g. permission
+ * error). Identifies the file path so the caller can surface it to the user. */
+export class WorkspaceReadError extends Error {
+  constructor(
+    public readonly filePath: string,
+    cause?: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Cannot read workspace file '${filePath}': ${detail}`);
+    this.name = 'WorkspaceReadError';
+  }
+}

@@ -349,8 +349,18 @@ async function captureInitialState(
   if (!opts.skipAudit && !opts.dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
-      preCleanupAuditRaw = stdout;
       initialAdvisories = extractAdvisories(stdout);
+      // Only retain the pre-cleanup snapshot when it is a valid audit response
+      // (contains an `advisories` key).  pnpm returns {"error":{...}} when there
+      // is no lockfile yet; that error string must not shadow the post-install
+      // audit that `runAuditPhase` captures for `getDirectDepPackageJsonBumps`.
+      try {
+        if ((JSON.parse(stdout) as { advisories?: unknown }).advisories !== undefined) {
+          preCleanupAuditRaw = stdout;
+        }
+      } catch {
+        // stdout is not JSON — leave preCleanupAuditRaw empty
+      }
     } catch {
       // Best-effort: a missing lockfile or other audit failure leaves the
       // initial set empty rather than aborting the whole run.

@@ -69,7 +69,7 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       expect(lodashOverride ?? null).toBeNull();
     });
 
-    it('REQ-INT-PNPM10-002: non-catalog vulnerable dep gets a workspace override, not catalog promotion', async () => {
+    it('REQ-INT-PNPM10-002: non-catalog vulnerable dep has member package.json floor raised, not promoted to catalog', async () => {
       ws = setupRealWorkspace('v10-non-catalog-vuln');
 
       const result = await refreshDeps({
@@ -90,10 +90,14 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       // lodash is NOT in the catalog, so it should NOT appear there after the run.
       expect(parsed.catalog?.['lodash']).toBeUndefined();
 
-      // A workspace override should have been written to pin lodash above the vulnerable range.
-      const lodashOverride = parsed.overrides?.['lodash'];
-      expect(lodashOverride).toBeDefined();
-      expect(compareSemver(String(lodashOverride), '4.17.21')).toBeGreaterThanOrEqual(0);
+      // The member package.json floor should be raised to >= 4.17.21 directly.
+      // (Exact-pinned deps are fixed at the package.json level by raising the
+      // declared floor rather than adding a transient workspace override.)
+      const appPkgText = fs.readFileSync(path.join(ws.root, 'apps', 'app', 'package.json'), 'utf8');
+      const appPkg = JSON.parse(appPkgText) as { dependencies?: Record<string, string> };
+      const lodashVersion = appPkg.dependencies?.['lodash'];
+      expect(lodashVersion).toBeDefined();
+      expect(compareSemver(String(lodashVersion), '4.17.21')).toBeGreaterThanOrEqual(0);
     });
   });
 

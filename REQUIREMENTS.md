@@ -403,9 +403,10 @@ real pnpm 10 and pnpm 11 binaries.
   direct catalog dep, the catalog version SHALL be bumped and no override
   SHALL remain for that package.
 - **REQ-INT-PNPM10-002** — Against a pnpm 10 workspace where a vulnerable
-  package is a direct dependency of a member package but is **not** listed in
-  the workspace catalog, `refreshDeps` SHALL add a workspace-level override
-  for that package and SHALL NOT create a catalog entry for it.
+  package is an exact-pinned direct dependency of a member package but is
+  **not** listed in the workspace catalog, `refreshDeps` SHALL raise the
+  declared version floor in the member's `package.json` to a safe version
+  and SHALL NOT create a catalog entry for it.
 - **REQ-INT-PNPM11-001** — Against a pnpm 11 workspace with a vulnerable
   direct catalog dep, the catalog SHALL be bumped, the override SHALL be
   promoted, and the user's original `minimumReleaseAge` SHALL be restored

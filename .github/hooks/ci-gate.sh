@@ -47,10 +47,19 @@ if ! lint_output=$(pnpm lint 2>&1); then
 fi
 
 # ---------------------------------------------------------------------------
-# Both passed — short success notice.
+# Run integration tests (pnpm 10).
 # ---------------------------------------------------------------------------
-if $format_ok && $lint_ok; then
-  printf '{"continue":true,"systemMessage":"CI gate passed (format:check + lint)."}'
+integration_ok=true
+integration_output=""
+if ! integration_output=$(RUN_INTEGRATION=1 INTEGRATION_PNPM_MAJOR=10 pnpm test:integration 2>&1); then
+  integration_ok=false
+fi
+
+# ---------------------------------------------------------------------------
+# All passed — short success notice.
+# ---------------------------------------------------------------------------
+if $format_ok && $lint_ok && $integration_ok; then
+  printf '{"continue":true,"systemMessage":"CI gate passed (format:check + lint + integration)."}'
   exit 0
 fi
 
@@ -75,6 +84,14 @@ if ! $lint_ok; then
     | sed 's/["\]/'"'"'/g' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   [[ -z "$summary" ]] && summary=$(sanitise "$(printf '%s' "$lint_output" | head -5)")
   parts+=("lint failed — ${summary}. Run: pnpm lint")
+fi
+
+if ! $integration_ok; then
+  summary=$(printf '%s' "$integration_output" \
+    | grep -E 'FAIL|AssertionError|Error' | head -10 \
+    | sed 's/["\]/'"'"'/g' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  [[ -z "$summary" ]] && summary=$(sanitise "$(printf '%s' "$integration_output" | head -5)")
+  parts+=("integration tests failed — ${summary}. Run: RUN_INTEGRATION=1 INTEGRATION_PNPM_MAJOR=10 pnpm test:integration")
 fi
 
 # Join parts with " | ".

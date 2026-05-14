@@ -1,5 +1,20 @@
 # pnpm-audit-promote
 
+## [1.7.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.6.0...v1.7.0) (2026-05-14)
+
+
+### Features
+
+* enhance audit features and improve logging output handling ([#44](https://github.com/TheRoks/pnpm-audit-promote/issues/44)) ([e635c5b](https://github.com/TheRoks/pnpm-audit-promote/commit/e635c5bbe1ebf07f5f8f621aece802e63eb8ecc7))
+* enhance audit handling and improve test coverage for traceability ([#43](https://github.com/TheRoks/pnpm-audit-promote/issues/43)) ([eaf537a](https://github.com/TheRoks/pnpm-audit-promote/commit/eaf537acb3b6460671cfdedef5d59a1dd4706301))
+
+
+### Bug Fixes
+
+* **deps:** add unrun as a dev dependency in package.json and update pnpm-lock.yaml ([#41](https://github.com/TheRoks/pnpm-audit-promote/issues/41)) ([af29c85](https://github.com/TheRoks/pnpm-audit-promote/commit/af29c85964339b60b242c012f30df50367aeedb4))
+* **summary:** adjust terminal output color based on TTY detection ([e635c5b](https://github.com/TheRoks/pnpm-audit-promote/commit/e635c5bbe1ebf07f5f8f621aece802e63eb8ecc7))
+* **traceability:** improve test coverage reporting for deprecated requirements ([eaf537a](https://github.com/TheRoks/pnpm-audit-promote/commit/eaf537acb3b6460671cfdedef5d59a1dd4706301))
+
 ## [1.6.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.5.0...v1.6.0) (2026-05-12)
 
 

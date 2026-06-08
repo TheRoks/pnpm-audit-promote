@@ -1,5 +1,13 @@
 # pnpm-audit-promote
 
+## [1.8.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.7.0...v1.8.0) (2026-06-08)
+
+
+### Features
+
+* **audit:** enhance advisory matching with case-insensitive checks and improve error handling for non-string module names ([#46](https://github.com/TheRoks/pnpm-audit-promote/issues/46)) ([59cfa97](https://github.com/TheRoks/pnpm-audit-promote/commit/59cfa9755ee54bcb7bd3aa52dff44e362dc71ac4))
+* **override:** enhance collapse logic to merge overlapping selectors with stronger fix floor ([#72](https://github.com/TheRoks/pnpm-audit-promote/issues/72)) ([c8fa34e](https://github.com/TheRoks/pnpm-audit-promote/commit/c8fa34e768c86209d028167a7952f016f9c8f57d))
+
 ## [1.7.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.6.0...v1.7.0) (2026-05-14)
 
 

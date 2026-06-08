@@ -149,8 +149,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   SHALL be logged at detail level.
 - **REQ-OVERRIDES-005** — `collapseQualifiedOverrideEntries` SHALL
   deduplicate redundant qualified selectors (e.g. multiple
-  `pkg@<=x` siblings written by pnpm 11) into the broadest equivalent
-  selector.
+  `pkg@<=x` siblings written by pnpm 11) into a single broader selector
+  when their combined coverage can be represented losslessly as one
+  selector, and SHALL preserve the strongest fix floor on the survivor.
 - **REQ-OVERRIDES-006** — Override promotion SHALL never lower a catalog
   version; an override whose resolved version is at or below the current
   catalog version SHALL be discarded rather than promoted.

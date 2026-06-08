@@ -158,8 +158,10 @@ function collapseQualifiedYamlOverrides(
     entries.push({ id: i, bare, range: normalized, val });
   }
 
-  const { drop, updates } = collapseQualifiedOverrideEntries(entries);
-  if (drop.size === 0 && updates.size === 0) return { items, changed: false };
+  const { drop, updates, rangeUpdates } = collapseQualifiedOverrideEntries(entries);
+  if (drop.size === 0 && updates.size === 0 && rangeUpdates.size === 0) {
+    return { items, changed: false };
+  }
 
   const out: Pair[] = [];
   for (let i = 0; i < items.length; i++) {
@@ -167,6 +169,11 @@ function collapseQualifiedYamlOverrides(
     const item = items[i];
     if (!item) continue;
     const updated = updates.get(i);
+    const updatedRange = rangeUpdates.get(i);
+    if (updatedRange !== undefined && isScalar(item.key)) {
+      const currentKey = String(item.key.value);
+      item.key.value = `${getBarePackageName(currentKey)}@${updatedRange}`;
+    }
     if (updated !== undefined && isScalar(item.value)) {
       item.value.value = updated;
     }

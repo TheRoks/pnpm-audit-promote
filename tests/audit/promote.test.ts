@@ -167,6 +167,35 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     expect(overrides['webpack@>=5.49.0 <5.104.0']).toBeUndefined();
   });
 
+  it('REQ-OVERRIDES-005: squashes overlapping selectors into one broader selector with the stronger fix floor', () => {
+    const yaml = "catalog:\n  react: '18.2.0'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: {
+          overrides: {
+            'serialize-javascript@<=7.0.2': '>=7.0.3',
+            'serialize-javascript@>=5.0.0 <7.0.5': '>=7.0.5',
+          },
+        },
+      },
+      null,
+      2,
+    );
+
+    const state = writeWorkspace(yaml, pkg);
+    const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+    expect(out).toBe(yaml);
+
+    const parsed = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: { overrides?: Record<string, string> };
+    };
+    const overrides = parsed.pnpm?.overrides ?? {};
+    const keys = Object.keys(overrides).filter((k) => k.startsWith('serialize-javascript@'));
+    expect(keys).toEqual(['serialize-javascript@<7.0.5']);
+    expect(overrides['serialize-javascript@<7.0.5']).toBe('>=7.0.5');
+  });
+
   it('REQ-OVERRIDES-005, REQ-PNPM11-007: collapses open-ended (no lower bound) qualified package.json overrides', () => {
     // Mirrors the user's real-world `--ignore-workspace` run where pnpm 11
     // wrote 9 unrelated `tar` / `serialize-javascript` / `postcss`
@@ -347,6 +376,24 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     expect(out).toContain('axios@>=1.0.0 <1.15.2');
     expect(out).toContain("'>=1.15.2'");
     expect(out).not.toContain('<1.15.1');
+  });
+
+  it('REQ-OVERRIDES-005: squashes overlapping workspace selectors into one broader selector with the stronger fix floor', () => {
+    const yaml = [
+      'catalog: {}',
+      '',
+      'overrides:',
+      "  'serialize-javascript@<=7.0.2': '>=7.0.3'",
+      "  'serialize-javascript@>=5.0.0 <7.0.5': '>=7.0.5'",
+      '',
+    ].join('\n');
+
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+
+    const matches = out.match(/serialize-javascript@[^'"\s]+/g) ?? [];
+    expect(matches).toEqual(['serialize-javascript@<7.0.5']);
+    expect(out).toContain("'>=7.0.5'");
   });
 
   it('REQ-OVERRIDES-005: collapses equivalent workspace override selectors keeping the first occurrence', () => {

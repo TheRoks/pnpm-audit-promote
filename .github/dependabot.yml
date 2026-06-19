@@ -1,11 +1,98 @@
 version: 2
+
 updates:
-  - package-ecosystem: npm
-    directory: /
+  - package-ecosystem: 'npm'
+    directory: '/'
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-  - package-ecosystem: github-actions
-    directory: /
+      interval: 'daily'
+      time: '04:00'
+      timezone: 'Europe/Amsterdam'
+    cooldown:
+      default-days: 1
+    open-pull-requests-limit: 5
+    groups:
+      runtime-dependencies:
+        dependency-type: 'production'
+        patterns:
+          - 'commander'
+          - 'cross-spawn'
+          - 'jsonc-parser'
+          - 'picocolors'
+          - 'picomatch'
+          - 'semver'
+          - 'yaml'
+      typescript-and-linting:
+        dependency-type: 'development'
+        patterns:
+          - '@eslint/*'
+          - 'eslint'
+          - 'globals'
+          - 'typescript'
+          - 'typescript-eslint'
+        update-types:
+          - 'minor'
+          - 'patch'
+      testing:
+        dependency-type: 'development'
+        patterns:
+          - '@vitest/*'
+          - 'fast-check'
+          - 'vite'
+          - 'vitest'
+        update-types:
+          - 'minor'
+          - 'patch'
+      build-and-publish:
+        dependency-type: 'development'
+        patterns:
+          - '@arethetypeswrong/*'
+          - 'publint'
+          - 'tsdown'
+          - 'tsx'
+          - 'unrun'
+        update-types:
+          - 'minor'
+          - 'patch'
+      formatting-and-hooks:
+        dependency-type: 'development'
+        patterns:
+          - 'husky'
+          - 'lint-staged'
+          - 'prettier'
+        update-types:
+          - 'minor'
+          - 'patch'
+      type-definitions:
+        dependency-type: 'development'
+        patterns:
+          - '@types/*'
+        update-types:
+          - 'minor'
+          - 'patch'
+      security-updates:
+        applies-to: 'security-updates'
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: weekly
+      interval: 'weekly'
+      day: 'friday'
+      time: '04:30'
+      timezone: 'Europe/Amsterdam'
+    cooldown:
+      default-days: 1
+    open-pull-requests-limit: 3
+    groups:
+      setup-actions:
+        patterns:
+          - 'actions/checkout'
+          - 'actions/setup-node'
+          - 'pnpm/action-setup'
+      release-actions:
+        patterns:
+          - 'googleapis/release-please-action'

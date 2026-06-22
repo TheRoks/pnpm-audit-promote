@@ -234,9 +234,12 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   Previously: `restoreMinimumReleaseAge` restored the user's original
   `minimumReleaseAge` value before the tool exited. No longer needed once
   the tool stops mutating the global value (REQ-PNPM11-010).)_
-- **REQ-PNPM11-004** — `mergeMinimumReleaseAgeExclude` SHALL merge any
-  `minimumReleaseAgeExclude` entries pnpm 11 writes during
-  `pnpm audit --fix` back into the file.
+- **REQ-PNPM11-004** _(deprecated — superseded by REQ-PNPM11-011.
+  Previously: `mergeMinimumReleaseAgeExclude` merged any
+  `minimumReleaseAgeExclude` entries pnpm 11 wrote during
+  `pnpm audit --fix` back into the file. Removed because the tool no
+  longer expands the exclude list; the user's original block is preserved
+  verbatim and any entries pnpm wrote transiently are discarded.)_
 - **REQ-PNPM11-005** — `devEngines.packageManager` declaring pnpm 11 SHALL
   be recognized as a pnpm workspace signal.
 - **REQ-PNPM11-006** — Under `--ignore-workspace` on pnpm 11,
@@ -246,19 +249,41 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   `pkg@<=x.y.z` siblings) SHALL be collapsed before promotion.
 - **REQ-PNPM11-008** — The `--ignore-workspace` flag SHALL be forwarded to
   every `pnpm` invocation when set.
-- **REQ-PNPM11-009** — When the target workspace pins pnpm 11 and the
-  pre-cleanup `pnpm audit --json` reports advisories, the tool SHALL
-  extract the minimum patched version of each advisory — taking the
-  highest minimum when a package appears in multiple advisories — and
-  merge those entries into the top-level `minimumReleaseAgeExclude` block
-  of `pnpm-workspace.yaml` before running `pnpm audit --fix`.
-  _Rationale: targeted per-package exclusion allows patched versions
-  published less than `minimumReleaseAge` ago to be installed while
-  preserving the release-age gate for all other packages. This supersedes
-  the deprecated global zeroing (REQ-PNPM11-002/003)._
+- **REQ-PNPM11-009** _(deprecated — superseded by REQ-PNPM11-011.
+  Previously: when the target workspace pinned pnpm 11 and the pre-cleanup
+  `pnpm audit --json` reported advisories, the tool extracted the minimum
+  patched version of each advisory and pre-seeded those entries into the
+  top-level `minimumReleaseAgeExclude` block before running
+  `pnpm audit --fix`. Removed because pre-seeding expands the exclude list,
+  which the tool must not do.)_
 - **REQ-PNPM11-010** — The tool SHALL NOT modify the top-level
   `minimumReleaseAge` value in `pnpm-workspace.yaml`. The user’s
   configured release-age gate is preserved verbatim across the run.
+- **REQ-PNPM11-011** — The tool SHALL NOT add to or otherwise modify the
+  top-level `minimumReleaseAgeExclude` block in `pnpm-workspace.yaml`. It
+  SHALL neither pre-seed advisory-fix versions before `pnpm audit --fix`
+  nor merge back entries pnpm 11 writes during the run. After
+  `pnpm audit --fix`, the on-disk `minimumReleaseAgeExclude` block SHALL be
+  reset to the user's original content — or removed entirely when the user
+  had none — before any override-promotion pass reads (and would otherwise
+  re-serialise) the file. Both block-mapping and block-sequence forms are
+  handled. The user's exclude list is preserved verbatim.
+  _Trade-off: a freshly-published advisory-fix version (published less
+  than `minimumReleaseAge` ago) may be blocked by pnpm 11's release-age
+  gate. Users who want to allow it must add the entry themselves._
+- **REQ-PNPM11-012** — When the workspace configures a positive top-level
+  `minimumReleaseAge`, after `pnpm audit --fix` the tool SHALL verify each
+  override pnpm wrote into `pnpm-workspace.yaml` against that release-age
+  gate. An override whose satisfying published versions are **all** newer
+  than `minimumReleaseAge` (none old enough) SHALL be dropped from
+  `pnpm-workspace.yaml` before the subsequent install, so the install does
+  not fail under pnpm's strict release-age resolution and the user's
+  `minimumReleaseAgeExclude` list is not expanded (REQ-PNPM11-011).
+  Overrides matching the user's own `minimumReleaseAgeExclude` entries, and
+  overrides whose value is not a plain version/range, SHALL be kept. A
+  package whose registry publish time is unavailable SHALL be treated as old
+  enough (honouring `minimumReleaseAgeIgnoreMissingTime`). The check SHALL be
+  skippable via `--no-release-age-check` for offline runs.
 
 ## SUMMARY — run summary output
 

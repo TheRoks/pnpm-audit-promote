@@ -212,6 +212,54 @@ describe('WorkspaceState', () => {
     expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
   });
 
+  it("REQ-PNPM11-011: resetMinimumReleaseAgeExclude restores the user's original block on disk", () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(
+      wsPath,
+      "minimumReleaseAgeExclude:\n  - '@achmea/*'\ncatalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+    const ws = WorkspaceState.initialize(tmp);
+    // Simulate pnpm expanding the block on disk after `audit --fix`.
+    fs.writeFileSync(
+      wsPath,
+      "minimumReleaseAgeExclude:\n  - '@achmea/*'\n  - 'axios@1.7.4'\ncatalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+
+    ws.resetMinimumReleaseAgeExclude(silentLogger);
+
+    const after = fs.readFileSync(wsPath, 'utf8');
+    expect(after).toBe(
+      "minimumReleaseAgeExclude:\n  - '@achmea/*'\ncatalog:\n  lodash: '4.17.20'\n",
+    );
+    expect(after).not.toContain('axios');
+    expect(ws.desiredWorkspaceYaml).toBe(after);
+  });
+
+  it('REQ-PNPM11-011: resetMinimumReleaseAgeExclude is a no-op when nothing changed', () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(wsPath, "catalog:\n  react: '18.2.0'\n", 'utf8');
+    const ws = WorkspaceState.initialize(tmp);
+    ws.resetMinimumReleaseAgeExclude(silentLogger);
+    expect(fs.readFileSync(wsPath, 'utf8')).toBe("catalog:\n  react: '18.2.0'\n");
+  });
+
+  it('REQ-PNPM11-011: resetMinimumReleaseAgeExclude removes a pnpm-created block when the user had none', () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(wsPath, "catalog:\n  lodash: '4.17.20'\n", 'utf8');
+    const ws = WorkspaceState.initialize(tmp);
+    fs.writeFileSync(
+      wsPath,
+      "minimumReleaseAgeExclude:\n  - 'lodash@4.17.21'\ncatalog:\n  lodash: '4.17.20'\n",
+      'utf8',
+    );
+
+    ws.resetMinimumReleaseAgeExclude(silentLogger);
+
+    expect(fs.readFileSync(wsPath, 'utf8')).toBe("catalog:\n  lodash: '4.17.20'\n");
+  });
+
   it('REQ-WORKSPACE-004: initializes from package.json with devEngines.packageManager (string form)', () => {
     fs.writeFileSync(
       path.join(tmp, 'package.json'),
@@ -242,70 +290,6 @@ describe('WorkspaceState', () => {
       'utf8',
     );
     expect(() => WorkspaceState.initialize(tmp)).toThrow(/No pnpm workspace found/);
-  });
-
-  it('REQ-PNPM11-009: seeds minimumReleaseAgeExclude entries when pnpm major >= 11', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'pnpm-workspace.yaml'),
-      "catalog:\n  react: '18.2.0'\n",
-      'utf8',
-    );
-    const ws = WorkspaceState.initialize(tmp);
-    ws.recordPnpmMajor(11);
-    ws.seedMinimumReleaseAgeExcludes(
-      new Map([
-        ['lodash', '4.17.21'],
-        ['axios', '1.7.4'],
-      ]),
-      silentLogger,
-    );
-    const onDisk = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
-    expect(onDisk).toContain('minimumReleaseAgeExclude:');
-    expect(onDisk).toContain('  lodash: 4.17.21');
-    expect(onDisk).toContain('  axios: 1.7.4');
-  });
-
-  it('REQ-PNPM11-010: never modifies the top-level minimumReleaseAge scalar', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'pnpm-workspace.yaml'),
-      "minimumReleaseAge: 720\ncatalog:\n  react: '18.2.0'\n",
-      'utf8',
-    );
-    const ws = WorkspaceState.initialize(tmp);
-    ws.recordPnpmMajor(11);
-    ws.seedMinimumReleaseAgeExcludes(new Map([['lodash', '4.17.21']]), silentLogger);
-    const onDisk = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
-    expect(onDisk).toContain('minimumReleaseAge: 720');
-    expect(onDisk).not.toContain('minimumReleaseAge: 0');
-    expect(onDisk).toContain('  lodash: 4.17.21');
-  });
-
-  it('REQ-PNPM11-009: is a no-op when the entries map is empty', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'pnpm-workspace.yaml'),
-      "catalog:\n  react: '18.2.0'\n",
-      'utf8',
-    );
-    const ws = WorkspaceState.initialize(tmp);
-    ws.recordPnpmMajor(11);
-    ws.seedMinimumReleaseAgeExcludes(new Map(), silentLogger);
-    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(
-      'minimumReleaseAgeExclude',
-    );
-  });
-
-  it('REQ-PNPM10-001: does not touch the yaml when pnpm major is < 11', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'pnpm-workspace.yaml'),
-      "catalog:\n  react: '18.2.0'\n",
-      'utf8',
-    );
-    const ws = WorkspaceState.initialize(tmp);
-    ws.recordPnpmMajor(10);
-    ws.seedMinimumReleaseAgeExcludes(new Map([['lodash', '4.17.21']]), silentLogger);
-    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(
-      'minimumReleaseAgeExclude',
-    );
   });
 });
 

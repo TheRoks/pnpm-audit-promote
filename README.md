@@ -38,10 +38,9 @@ Requires Node.js >= 22 and `pnpm` (10 or 11) available on `PATH`.
 
 ### pnpm 11 notes
 
-`pnpm-audit-promote` runs against both pnpm 10 and pnpm 11 workspaces. When it detects pnpm 11 it makes two adjustments for the duration of the run:
+`pnpm-audit-promote` runs against both pnpm 10 and pnpm 11 workspaces. When it detects pnpm 11:
 
-- Pre-seeds the specific vulnerable packages into `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` so freshly-published advisory-fix versions are not blocked by pnpm 11's default 24-hour release-age gate — while leaving the global `minimumReleaseAge` setting intact for all other packages.
-- Merges any `minimumReleaseAgeExclude` entries pnpm 11 writes during `pnpm audit --fix` back into the file, so the security excludes are preserved across the catalog-restoration step.
+- It never adds or modifies the `minimumReleaseAgeExclude` block in `pnpm-workspace.yaml`. Your release-age configuration — both the global `minimumReleaseAge` gate and any existing `minimumReleaseAgeExclude` entries — is preserved verbatim across the run. As a result, a freshly-published advisory-fix version (published less than `minimumReleaseAge` ago) may be blocked by pnpm 11's release-age gate; add it to `minimumReleaseAgeExclude` yourself if you want to allow it. When such a fix cannot satisfy your gate, the tool drops that override before the reinstall (instead of expanding your exclude list) so the install keeps working — re-run once the patch matures. Disable this with `--no-release-age-check`.
 
 `pnpm.overrides` defined in `package.json` are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
 
@@ -71,6 +70,7 @@ pnpm-audit-promote [options]
 | `--no-audit`                | Skip the audit + catalog promotion phase                                                                                                                                                                   |         |
 | `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                                                                                                                                   |         |
 | `--allow-major`             | Allow catalog bumps that cross a major version boundary (still logged as warnings). Use `--no-allow-major` to refuse them and keep the bump as an override.                                                | `true`  |
+| `--no-release-age-check`    | Skip the post-audit check that drops overrides pinning a version too fresh for the workspace's `minimumReleaseAge` gate. Use for fully offline runs where registry publish times cannot be fetched.        |         |
 | `--no-summary`              | Suppress the terminal-pretty run summary printed at the end                                                                                                                                                |         |
 | `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path. Path must be within the workspace root; outside paths are silently skipped.                                                   |         |
 | `--ignore-workspace`        | Treat `--path` as the workspace root even when an enclosing `pnpm-workspace.yaml` is found in a parent directory. Forwards `--ignore-workspace` to every pnpm invocation so installs/overrides stay local. | `false` |

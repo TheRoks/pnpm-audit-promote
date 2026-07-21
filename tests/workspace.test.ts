@@ -261,8 +261,8 @@ describe('WorkspaceState', () => {
     );
     const onDisk = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(onDisk).toContain('minimumReleaseAgeExclude:');
-    expect(onDisk).toContain('  lodash: 4.17.21');
-    expect(onDisk).toContain('  axios: 1.7.4');
+    expect(onDisk).toContain('  - lodash');
+    expect(onDisk).toContain('  - axios');
   });
 
   it('REQ-PNPM11-010: never modifies the top-level minimumReleaseAge scalar', () => {
@@ -277,7 +277,7 @@ describe('WorkspaceState', () => {
     const onDisk = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(onDisk).toContain('minimumReleaseAge: 720');
     expect(onDisk).not.toContain('minimumReleaseAge: 0');
-    expect(onDisk).toContain('  lodash: 4.17.21');
+    expect(onDisk).toContain('  - lodash');
   });
 
   it('REQ-PNPM11-009: is a no-op when the entries map is empty', () => {

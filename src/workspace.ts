@@ -5,7 +5,10 @@ import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError, WorkspaceReadError } from './errors';
-import { addMinimumReleaseAgeExcludeEntries } from './workspaceYamlPnpm11';
+import {
+  addMinimumReleaseAgeExcludeEntries,
+  restoreMinimumReleaseAgeExclude,
+} from './workspaceYamlPnpm11';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -113,7 +116,7 @@ export class WorkspaceState {
 
   /**
    * Pre-seed pnpm 11's `minimumReleaseAgeExclude` block in
-   * `pnpm-workspace.yaml` with the `name: minimumPatchedVersion` entries
+   * `pnpm-workspace.yaml` with the package names from the advisory entries
    * passed in. This unblocks `pnpm audit --fix override` (and the
    * subsequent install) from rejecting freshly-published patched versions
    * without disturbing the user’s global `minimumReleaseAge` setting —
@@ -140,6 +143,20 @@ export class WorkspaceState {
         entries.size === 1 ? 'y' : 'ies'
       } for advisory fixes: ${names.join(', ')}.`,
     );
+  }
+
+  /** Restore only `minimumReleaseAgeExclude` to its exact pre-run contents. */
+  restoreOriginalMinimumReleaseAgeExclude(logger: Logger): boolean {
+    if (!this.hasWorkspaceYaml || this.dryRun) return false;
+    const next = restoreMinimumReleaseAgeExclude(
+      this.desiredWorkspaceYaml,
+      this.originalWorkspaceYaml,
+    );
+    if (next === this.desiredWorkspaceYaml) return false;
+    this.desiredWorkspaceYaml = next;
+    this.saveWorkspaceYaml(next);
+    logger.detail('Restored `minimumReleaseAgeExclude` to its pre-run state.');
+    return true;
   }
 
   detectEol(): void {

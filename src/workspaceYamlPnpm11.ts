@@ -7,12 +7,13 @@
  *    `pnpm audit --fix` unable to promote a freshly-published patch release.
  *    We *do not* zero this gate — see REQ-PNPM11-010. Instead,
  *    {@link addMinimumReleaseAgeExcludeEntries} pre-seeds only the specific
- *    advisory-fix versions into `minimumReleaseAgeExclude`, leaving the
+ *    advisory-affected package names into `minimumReleaseAgeExclude`, leaving the
  *    global gate intact for every other package (REQ-PNPM11-009).
  *  - `pnpm audit --fix` itself writes `minimumReleaseAgeExclude` entries into
  *    `pnpm-workspace.yaml`, which the existing `restoreWorkspaceYaml` flow
- *    would clobber if it blindly wrote back the pre-run snapshot. See
- *    {@link mergeMinimumReleaseAgeExclude} for the reconciliation step.
+ *    would clobber before the post-audit install can consume them. See
+ *    {@link mergeMinimumReleaseAgeExclude} for the temporary reconciliation
+ *    and {@link restoreMinimumReleaseAgeExclude} for final cleanup.
  *
  * The helpers in this module are intentionally regex-based so they preserve
  * the YAML byte-for-byte outside the keys they explicitly target — matching
@@ -67,15 +68,15 @@ export function hasTopLevelKey(yaml: string, key: string): boolean {
 
 /**
  * Merge the `minimumReleaseAgeExclude` block from `source` into `target`,
- * returning the new target text. pnpm 11's `pnpm audit --fix` writes the
- * minimum patched version of each fixed advisory into this block; without a
+ * returning the new target text. pnpm 11 stores package names in this block;
+ * without a
  * merge step the subsequent `restoreWorkspaceYaml` would discard those
- * entries. Existing entries in `target` are preserved; entries with the
- * same key in `source` override them.
+ * entries too early. Existing entries in `target` are preserved and names
+ * already present in both inputs are deduplicated.
  *
- * The implementation is regex-based — when either side uses a flow-style
- * mapping (rare in pnpm-generated yaml) the source block is left as-is on
- * the file (no merge attempted) and `target` is returned unchanged.
+ * The implementation is regex-based. It preserves package order from the
+ * target, then appends source-only package names. Legacy map-shaped blocks
+ * emitted by older versions of this tool are converted to pnpm's list form.
  */
 export function mergeMinimumReleaseAgeExclude(target: string, source: string): string {
   const sourceBlock = extractMinimumReleaseAgeExcludeBlock(source);
@@ -86,19 +87,41 @@ export function mergeMinimumReleaseAgeExclude(target: string, source: string): s
 
   if (!targetBlockRange) {
     const trailingEol = target.length === 0 || target.endsWith('\n') ? '' : eol;
-    return `${target}${trailingEol}minimumReleaseAgeExclude:${eol}${sourceBlock.indented}${eol}`;
+    const names = parseExcludeNames(sourceBlock.indented);
+    return `${target}${trailingEol}minimumReleaseAgeExclude:${eol}${formatExcludeNames(names, eol)}${eol}`;
   }
 
-  // Merge entry-by-entry, source overrides target.
-  const targetEntries = parseExcludeEntries(targetBlockRange.body);
-  const sourceEntries = parseExcludeEntries(sourceBlock.indented);
-  const merged = new Map<string, string>();
-  for (const [name, line] of targetEntries) merged.set(name, line);
-  for (const [name, line] of sourceEntries) merged.set(name, line);
-
-  const mergedLines = Array.from(merged.values()).join(eol);
+  const merged = mergeExcludeNames(
+    parseExcludeNames(targetBlockRange.body),
+    parseExcludeNames(sourceBlock.indented),
+  );
+  const mergedLines = formatExcludeNames(merged, eol);
   const newBlock = `minimumReleaseAgeExclude:${eol}${mergedLines}${eol}`;
   return target.slice(0, targetBlockRange.start) + newBlock + target.slice(targetBlockRange.end);
+}
+
+/**
+ * Restore the top-level `minimumReleaseAgeExclude` block in `target` to the
+ * exact bytes it had in `original`. Other changes in `target` are preserved.
+ * If the original file had no block, any block added during the run is removed.
+ */
+export function restoreMinimumReleaseAgeExclude(target: string, original: string): string {
+  const targetRange = locateMinimumReleaseAgeExcludeBlock(target);
+  const originalRange = locateMinimumReleaseAgeExcludeBlock(original);
+
+  if (!originalRange) {
+    if (!targetRange) return target;
+    return target.slice(0, targetRange.start) + target.slice(targetRange.end);
+  }
+
+  const originalBlock = original.slice(originalRange.start, originalRange.end);
+  if (!targetRange) {
+    const eol = detectEol(target || original);
+    const trailingEol = target.length === 0 || target.endsWith('\n') ? '' : eol;
+    return `${target}${trailingEol}${originalBlock}`;
+  }
+
+  return target.slice(0, targetRange.start) + originalBlock + target.slice(targetRange.end);
 }
 
 interface ExcludeBlock {
@@ -165,27 +188,51 @@ function locateMinimumReleaseAgeExcludeBlock(yaml: string): BlockRange | null {
   return { start: headerStart, end: lastNonBlankCursor, body, indented: body };
 }
 
-function parseExcludeEntries(blockBody: string): Map<string, string> {
-  const map = new Map<string, string>();
+function parseExcludeNames(blockBody: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
   const lines = blockBody.split(SPLIT_EOL_RE);
   for (const line of lines) {
     if (line.trim() === '') continue;
-    const m = /^(\s+)([^:\s]+)\s*:/.exec(line);
-    if (!m) continue;
-    map.set(m[2]!, line);
+    // pnpm's supported form is a YAML sequence. Also recognize the legacy
+    // map written by prior releases so the next run repairs it safely.
+    const m = /^\s*-\s+([^\s#]+)|^\s+([^:\s]+)\s*:/.exec(line);
+    const name = m?.[1] ?? m?.[2];
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
   }
-  return map;
+  return names;
+}
+
+function mergeExcludeNames(...groups: readonly string[][]): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const name of group) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    }
+  }
+  return names;
+}
+
+function formatExcludeNames(names: readonly string[], eol: string): string {
+  return names.map((name) => `  - ${name}`).join(eol);
 }
 
 /**
- * Merge a `name -> version` map into the top-level
+ * Merge package names from a `name -> patched-version` map into the top-level
  * `minimumReleaseAgeExclude` block of `yaml`. Existing entries in `yaml`
  * are preserved; entries in `additions` override on key collision.
  *
  * When the block is missing, it is appended. When `additions` is empty,
  * `yaml` is returned unchanged.
  *
- * Used to pre-seed advisory-fix versions before `pnpm audit --fix override`
+ * Used to pre-seed advisory-affected package names before `pnpm audit --fix override`
  * so pnpm 11's release-age gate does not reject freshly-published patches,
  * without disturbing the user\u2019s global `minimumReleaseAge` setting.
  */
@@ -198,20 +245,16 @@ export function addMinimumReleaseAgeExcludeEntries(
   const range = locateMinimumReleaseAgeExcludeBlock(yaml);
 
   if (!range) {
-    const lines = [...additions]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, version]) => `  ${name}: ${version}`)
-      .join(eol);
+    const lines = formatExcludeNames(
+      [...additions.keys()].sort((a, b) => a.localeCompare(b)),
+      eol,
+    );
     const trailingEol = yaml.length === 0 || yaml.endsWith('\n') ? '' : eol;
     return `${yaml}${trailingEol}minimumReleaseAgeExclude:${eol}${lines}${eol}`;
   }
 
-  const existing = parseExcludeEntries(range.body);
-  const merged = new Map<string, string>(existing);
-  for (const [name, version] of additions) {
-    merged.set(name, `  ${name}: ${version}`);
-  }
-  const mergedLines = Array.from(merged.values()).join(eol);
+  const merged = mergeExcludeNames(parseExcludeNames(range.body), [...additions.keys()]);
+  const mergedLines = formatExcludeNames(merged, eol);
   const newBlock = `minimumReleaseAgeExclude:${eol}${mergedLines}${eol}`;
   return yaml.slice(0, range.start) + newBlock + yaml.slice(range.end);
 }

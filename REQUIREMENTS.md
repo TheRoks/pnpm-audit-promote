@@ -236,7 +236,7 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   the tool stops mutating the global value (REQ-PNPM11-010).)_
 - **REQ-PNPM11-004** — `mergeMinimumReleaseAgeExclude` SHALL merge any
   `minimumReleaseAgeExclude` entries pnpm 11 writes during
-  `pnpm audit --fix` back into the file.
+  `pnpm audit --fix` into the working snapshot for the remaining pnpm steps.
 - **REQ-PNPM11-005** — `devEngines.packageManager` declaring pnpm 11 SHALL
   be recognized as a pnpm workspace signal.
 - **REQ-PNPM11-006** — Under `--ignore-workspace` on pnpm 11,
@@ -248,9 +248,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   every `pnpm` invocation when set.
 - **REQ-PNPM11-009** — When the target workspace pins pnpm 11 and the
   pre-cleanup `pnpm audit --json` reports advisories, the tool SHALL
-  extract the minimum patched version of each advisory — taking the
-  highest minimum when a package appears in multiple advisories — and
-  merge those entries into the top-level `minimumReleaseAgeExclude` block
+  extract the advisory package name (using the highest minimum patched
+  version only to resolve duplicate advisories) and merge the package names
+  into the top-level `minimumReleaseAgeExclude` list
   of `pnpm-workspace.yaml` before running `pnpm audit --fix`.
   _Rationale: targeted per-package exclusion allows patched versions
   published less than `minimumReleaseAge` ago to be installed while
@@ -259,6 +259,10 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-PNPM11-010** — The tool SHALL NOT modify the top-level
   `minimumReleaseAge` value in `pnpm-workspace.yaml`. The user’s
   configured release-age gate is preserved verbatim across the run.
+- **REQ-PNPM11-011** — After all pnpm commands finish, the tool SHALL restore
+  the top-level `minimumReleaseAgeExclude` block byte-for-byte to its pre-run
+  state while preserving all other intended workspace YAML changes. This
+  restoration SHALL also run when an ordinary execution error is thrown.
 
 ## SUMMARY — run summary output
 

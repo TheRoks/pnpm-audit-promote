@@ -168,34 +168,37 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
 
   const initial = await captureInitialState(state, pnpm, logger, { skipAudit, dryRun });
 
-  // pnpm 11 enforces a global `minimumReleaseAge` gate that, by default,
-  // rejects packages published <24h ago — including the very patches
-  // `pnpm audit --fix` would install. Pre-seed only the *specific*
-  // advisory-fix versions into `minimumReleaseAgeExclude` so the gate
-  // continues to protect every other package (REQ-PNPM11-009/010).
-  if (!dryRun && (state.pnpmMajor ?? 0) >= 11 && initial.preCleanupAuditRaw) {
-    const entries = extractMinimumPatchedVersions(initial.preCleanupAuditRaw);
-    state.seedMinimumReleaseAgeExcludes(entries, logger);
-  }
-
-  await runCleanupPhase(state, progressLogger);
-
-  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
-    skipDedupe: Boolean(options.skipDedupe),
-    installLabel: 'Install dependencies',
-  });
-
   let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-  if (!skipAudit) {
-    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+  try {
+    // pnpm 11 enforces a global `minimumReleaseAge` gate that can reject the
+    // patches `pnpm audit --fix` needs. Keep targeted exclusions active only
+    // while pnpm commands consume the fix; the finally block restores the
+    // exact pre-run block on both success and failure (REQ-PNPM11-009/011).
+    if (!dryRun && (state.pnpmMajor ?? 0) >= 11 && initial.preCleanupAuditRaw) {
+      const entries = extractMinimumPatchedVersions(initial.preCleanupAuditRaw);
+      state.seedMinimumReleaseAgeExcludes(entries, logger);
+    }
+
+    await runCleanupPhase(state, progressLogger);
+
+    await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
       skipDedupe: Boolean(options.skipDedupe),
-      allowMajor: options.allowMajor ?? true,
-      dryRun,
-      preCleanupAuditRaw: initial.preCleanupAuditRaw,
-      ignoreWorkspace: options.ignoreWorkspace ?? false,
+      installLabel: 'Install dependencies',
     });
-  } else {
-    logger.detail('Skipped audit and catalog promotion (--no-audit).');
+
+    if (!skipAudit) {
+      pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+        skipDedupe: Boolean(options.skipDedupe),
+        allowMajor: options.allowMajor ?? true,
+        dryRun,
+        preCleanupAuditRaw: initial.preCleanupAuditRaw,
+        ignoreWorkspace: options.ignoreWorkspace ?? false,
+      });
+    } else {
+      logger.detail('Skipped audit and catalog promotion (--no-audit).');
+    }
+  } finally {
+    state.restoreOriginalMinimumReleaseAgeExclude(logger);
   }
 
   // Always assemble the canonical summary; rendering is conditional.
@@ -586,16 +589,16 @@ async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger)
     logger.detail('Detected pnpm-workspace.yaml created by `pnpm audit --fix`.');
   }
 
-  // pnpm 11's `audit --fix` writes `minimumReleaseAgeExclude` entries into
-  // pnpm-workspace.yaml so the patched versions are not blocked by the
-  // global `minimumReleaseAge` gate. Merge those additions into our desired
-  // snapshot before override promotion (which writes a fresh file) so we
-  // don't silently discard the security-exclude list.
+  // Keep pnpm 11's audit-added exclusions in the desired snapshot through
+  // override promotion and the post-audit install. refreshDeps restores the
+  // exact pre-run block in its finally path after all pnpm work is complete.
   if (state.hasWorkspaceYaml && (state.pnpmMajor ?? 0) >= 11) {
     const onDisk = state.readWorkspaceYaml();
     const merged = mergeMinimumReleaseAgeExclude(state.desiredWorkspaceYaml, onDisk);
     if (merged !== state.desiredWorkspaceYaml) {
-      logger.detail('Merged `minimumReleaseAgeExclude` entries written by pnpm 11 audit --fix.');
+      logger.detail(
+        'Temporarily merged `minimumReleaseAgeExclude` entries written by pnpm 11 audit --fix.',
+      );
       state.desiredWorkspaceYaml = merged;
     }
   }

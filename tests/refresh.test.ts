@@ -868,10 +868,11 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(yamlAfter).toBe("catalog:\n  react: '18.2.0'\n");
   });
 
-  it('REQ-PNPM11-009: pre-seeds minimumReleaseAgeExclude entries from the initial audit on pnpm 11', async () => {
+  it('REQ-PNPM11-009, REQ-PNPM11-011: uses pre-seeded exclusions temporarily on pnpm 11', async () => {
+    const originalYaml = "minimumReleaseAge: 720\ncatalog:\n  lodash: '4.17.20'\n";
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
-      "minimumReleaseAge: 720\ncatalog:\n  lodash: '4.17.20'\n",
+      originalYaml,
       'utf8',
     );
     fs.writeFileSync(
@@ -884,7 +885,18 @@ describe('refreshDeps integration (mocked pnpm)', () => {
         '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
       },
     });
-    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+    const { runner: baseRunner } = makeRecordingRunner({ 'audit --json': auditJson });
+    let sawTemporaryExclude = false;
+    const runner = {
+      ...baseRunner,
+      async run(args: string[]) {
+        if (args[0] === 'install') {
+          const yamlDuringRun = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
+          sawTemporaryExclude ||= yamlDuringRun.includes('  - lodash');
+        }
+        return baseRunner.run(args);
+      },
+    };
 
     await refreshDeps({
       path: tmp,
@@ -896,11 +908,82 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     });
 
     const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
-    expect(yamlAfter).toContain('minimumReleaseAgeExclude:');
-    expect(yamlAfter).toContain('  lodash: 4.17.21');
-    // REQ-PNPM11-010: the user's global gate is preserved verbatim.
+    expect(sawTemporaryExclude).toBe(true);
+    expect(yamlAfter).not.toContain('minimumReleaseAgeExclude:');
+    expect(yamlAfter).toContain("lodash: '4.17.21'");
     expect(yamlAfter).toContain('minimumReleaseAge: 720');
-    expect(yamlAfter).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
+  });
+
+  it('REQ-PNPM11-004, REQ-PNPM11-011: removes exclusions added by audit --fix', async () => {
+    const originalYaml = "minimumReleaseAgeExclude:\n  - '@achmea/*'\ncatalog:\n  react: '18.2.0'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), originalYaml, 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+    const { runner: baseRunner } = makeRecordingRunner({
+      'audit --json': JSON.stringify({ advisories: {} }),
+    });
+    const runner = {
+      ...baseRunner,
+      async runAllowFail(args: string[]) {
+        if (args[0] === 'audit' && args.includes('--fix')) {
+          fs.writeFileSync(
+            path.join(tmp, 'pnpm-workspace.yaml'),
+            "minimumReleaseAgeExclude:\n  - '@achmea/*'\n  - lodash\ncatalog:\n  react: '18.2.0'\n",
+            'utf8',
+          );
+        }
+        return baseRunner.runAllowFail(args);
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toBe(originalYaml);
+  });
+
+  it('REQ-PNPM11-011: restores the exact original exclusion block when an install fails', async () => {
+    const originalYaml =
+      "minimumReleaseAge: 720\nminimumReleaseAgeExclude:\n  - '@achmea/*'\ncatalog:\n  lodash: '4.17.20'\n";
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), originalYaml, 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
+      'utf8',
+    );
+    const auditJson = JSON.stringify({
+      advisories: { '1': { module_name: 'lodash', patched_versions: '>=4.17.21' } },
+    });
+    const { runner: baseRunner } = makeRecordingRunner({ 'audit --json': auditJson });
+    const runner = {
+      ...baseRunner,
+      async run(args: string[]) {
+        if (args[0] === 'install') throw new Error('install failed');
+        return baseRunner.run(args);
+      },
+    };
+
+    await expect(
+      refreshDeps({
+        path: tmp,
+        force: true,
+        logger: silentLogger,
+        pnpm: runner,
+        skipDedupe: true,
+        summary: false,
+      }),
+    ).rejects.toThrow('install failed');
+
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toBe(originalYaml);
   });
 
   it('REQ-PNPM11-009: does not seed minimumReleaseAgeExclude on pnpm 10', async () => {

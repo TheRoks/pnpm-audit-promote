@@ -546,6 +546,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     });
 
     expect(result.canceled).toBe(true);
+    expect(result.auditStatus).toBe('skipped');
     expect(result.summary).toBeNull();
     // No pnpm commands should run when canceled.
     expect(calls).toEqual([]);
@@ -571,6 +572,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     });
 
     expect(result.canceled).toBe(false);
+    expect(result.auditStatus).toBe('skipped');
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(result.catalogChanges)).toBe(true);
     expect(Array.isArray(result.overrideChanges)).toBe(true);
@@ -693,6 +695,89 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // Nothing was actually cleared, so fixedAdvisories must be empty.
     expect(result.fixedAdvisories).toEqual([]);
     expect(result.finalAdvisories).toHaveLength(1);
+    expect(result.auditStatus).toBe('complete');
+  });
+
+  it('REQ-SUMMARY-009: accepts valid final audit JSON as complete despite a non-zero exit', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const { runner } = makeRecordingRunner();
+    const nonZeroAuditRunner: typeof runner = {
+      ...runner,
+      async capture(args) {
+        if (args.join(' ') === 'audit --json') {
+          return { stdout: JSON.stringify({ advisories: {} }), exitCode: 1 };
+        }
+        return runner.capture(args);
+      },
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: nonZeroAuditRunner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(result.auditStatus).toBe('complete');
+    expect(result.fixedAdvisories).toEqual([]);
+  });
+
+  it('REQ-SUMMARY-009: preserves unknown status when the final audit capture throws', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+
+    const initialAudit = JSON.stringify({
+      advisories: {
+        '1': { module_name: 'left-pad', severity: 'high', title: 'Example advisory' },
+      },
+    });
+    const warnings: string[] = [];
+    const warningLogger = { ...silentLogger, warn: (message: string) => warnings.push(message) };
+    const { runner } = makeRecordingRunner();
+    let auditCallCount = 0;
+    const throwingFinalRunner: typeof runner = {
+      ...runner,
+      async capture(args) {
+        if (args.join(' ') === 'audit --json') {
+          auditCallCount += 1;
+          if (auditCallCount === 1) return { stdout: initialAudit, exitCode: 1 };
+          if (auditCallCount === 2) {
+            return { stdout: JSON.stringify({ advisories: {} }), exitCode: 0 };
+          }
+          throw new Error('registry unavailable');
+        }
+        return runner.capture(args);
+      },
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: warningLogger,
+      pnpm: throwingFinalRunner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(result.auditStatus).toBe('failed');
+    expect(result.summary?.auditStatus).toBe('failed');
+    expect(result.finalAdvisories).toEqual([]);
+    expect(result.fixedAdvisories).toEqual([]);
+    expect(warnings).toContain(
+      'Final audit verification failed; fixed and remaining vulnerability counts are unknown.',
+    );
   });
 
   it("REQ-PNPM10-001: uses bare 'audit --fix' when the target workspace pins pnpm 10", async () => {
@@ -1048,7 +1133,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     fs.writeFileSync(path.join(tmp, 'package.json'), pkgContent, 'utf8');
     fs.writeFileSync(path.join(tmp, 'pnpm-lock.yaml'), lockContent, 'utf8');
 
-    await refreshDeps({
+    const result = await refreshDeps({
       path: tmp,
       force: true,
       logger: silentLogger,
@@ -1057,6 +1142,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
       skipDedupe: true,
     });
 
+    expect(result.auditStatus).toBe('skipped');
     expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toBe(yamlContent);
     expect(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')).toBe(pkgContent);
     expect(fs.readFileSync(path.join(tmp, 'pnpm-lock.yaml'), 'utf8')).toBe(lockContent);

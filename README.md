@@ -168,13 +168,18 @@ const result = await refreshDeps({
   // pnpm: customPnpmRunner, // inject a fake/recording PnpmRunner in tests
 });
 
-console.log(`Fixed ${result.fixedAdvisories.length} vulnerabilities in ${result.durationMs}ms.`);
+if (result.auditStatus === 'complete') {
+  console.log(`Fixed ${result.fixedAdvisories.length} vulnerabilities in ${result.durationMs}ms.`);
+} else {
+  console.warn(`Final vulnerability status: ${result.auditStatus ?? 'unknown'}.`);
+}
 ```
 
 `refreshDeps` resolves to a [`RefreshResult`](./src/refresh.ts) with:
 
 - `canceled` — `true` when the destructive-action prompt was declined.
 - `durationMs` — wall-clock duration of the run.
+- `auditStatus` — final verification state: `complete`, `failed`, or `skipped`.
 - `catalogChanges`, `overrideChanges` — direct-dep catalog bumps and the overrides that were added/modified.
 - `initialAdvisories`, `finalAdvisories`, `fixedAdvisories` — the audit-derived vulnerability sets before, after, and the diff.
 - `summary` — the full structured `RunSummaryData` regardless of the `summary` rendering flag (so CI can serialize it).
@@ -186,7 +191,7 @@ console.log(`Fixed ${result.fixedAdvisories.length} vulnerabilities in ${result.
 `WorkspaceState`,
 `createPnpmRunner`, `ensurePnpmAvailable`, `PnpmRunner`, `PnpmOptions`,
 `renderTerminalSummary`, `RenderOptions`,
-`AdvisorySummary`, `CatalogChange`, `OverrideChange`, `RunSummaryData`, `Severity`,
+`AdvisorySummary`, `AuditStatus`, `CatalogChange`, `OverrideChange`, `RunSummaryData`, `Severity`,
 `ConfirmFn`, `ConfirmContext`,
 `PKG_VERSION`,
 and the typed errors

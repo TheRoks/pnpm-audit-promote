@@ -1,7 +1,7 @@
 # Integration fixture: pnpm 11 workspace with a vulnerable direct catalog
 # dep. The user's `minimumReleaseAge: 720` MUST be preserved verbatim after
-# the run — REQ-PNPM11-010 forbids touching the global gate. The tool
-# instead pre-seeds `minimumReleaseAgeExclude` with the patched versions.
+# the run — REQ-PNPM11-010 forbids touching the global gate and REQ-PNPM11-011
+# forbids adding any `minimumReleaseAgeExclude` entries.
 minimumReleaseAge: 720
 
 packages:

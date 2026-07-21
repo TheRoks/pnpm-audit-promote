@@ -868,7 +868,7 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(yamlAfter).toBe("catalog:\n  react: '18.2.0'\n");
   });
 
-  it('REQ-PNPM11-009: pre-seeds minimumReleaseAgeExclude entries from the initial audit on pnpm 11', async () => {
+  it('REQ-PNPM11-011: does not add minimumReleaseAgeExclude entries on pnpm 11', async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),
       "minimumReleaseAge: 720\ncatalog:\n  lodash: '4.17.20'\n",
@@ -896,42 +896,62 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     });
 
     const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
-    expect(yamlAfter).toContain('minimumReleaseAgeExclude:');
-    expect(yamlAfter).toContain('  lodash: 4.17.21');
+    // The tool must never add the exclude block, even when advisories exist.
+    expect(yamlAfter).not.toContain('minimumReleaseAgeExclude');
     // REQ-PNPM11-010: the user's global gate is preserved verbatim.
     expect(yamlAfter).toContain('minimumReleaseAge: 720');
     expect(yamlAfter).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
   });
 
-  it('REQ-PNPM11-009: does not seed minimumReleaseAgeExclude on pnpm 10', async () => {
-    fs.writeFileSync(
-      path.join(tmp, 'pnpm-workspace.yaml'),
-      "catalog:\n  lodash: '4.17.20'\n",
-      'utf8',
-    );
+  it("REQ-PNPM11-011: preserves the user's existing minimumReleaseAgeExclude block verbatim", async () => {
+    const original =
+      "minimumReleaseAge: 720\nminimumReleaseAgeExclude:\n  - '@achmea/*'\ncatalog:\n  lodash: '4.17.20'\n";
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(wsPath, original, 'utf8');
     fs.writeFileSync(
       path.join(tmp, 'package.json'),
-      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.0.0' }),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.0.0' }),
       'utf8',
     );
     const auditJson = JSON.stringify({
       advisories: {
-        '1': { module_name: 'lodash', patched_versions: '>=4.17.21' },
+        '1': { module_name: 'axios', patched_versions: '>=1.7.4' },
       },
     });
-    const { runner } = makeRecordingRunner({ 'audit --json': auditJson });
+    const { runner } = makeRecordingRunner({ 'audit --json': auditJson }, { version: '11.0.0' });
+    // Simulate pnpm 11 `audit --fix override` expanding the exclude list on
+    // disk with freshly-patched advisory versions (block-sequence form).
+    const expandingRunner = {
+      ...runner,
+      async runAllowFail(args: string[]) {
+        if (args[0] === 'audit' && args.includes('--fix')) {
+          fs.writeFileSync(
+            wsPath,
+            "minimumReleaseAge: 720\nminimumReleaseAgeExclude:\n  - '@achmea/*'\n  - 'axios@1.7.4'\n  - 'lodash@4.17.21'\ncatalog:\n  lodash: '4.17.20'\n",
+            'utf8',
+          );
+        }
+        return runner.runAllowFail(args);
+      },
+    };
 
     await refreshDeps({
       path: tmp,
       force: true,
       logger: silentLogger,
-      pnpm: runner,
+      pnpm: expandingRunner,
       skipDedupe: true,
       summary: false,
     });
 
-    const yamlAfter = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
-    expect(yamlAfter).not.toContain('minimumReleaseAgeExclude');
+    const yamlAfter = fs.readFileSync(wsPath, 'utf8');
+    // The user's single original entry is kept; pnpm's additions are discarded.
+    expect(yamlAfter).toContain("  - '@achmea/*'");
+    expect(yamlAfter).not.toContain('axios@1.7.4');
+    expect(yamlAfter).not.toContain('lodash@4.17.21');
+    // Exactly one exclude entry remains.
+    const excludeLines = yamlAfter.split('\n').filter((l) => /^\s+-\s/.test(l));
+    expect(excludeLines).toHaveLength(1);
   });
 
   it('REQ-CORE-008: runs pnpm audit --json before any cleanup or pnpm install', async () => {

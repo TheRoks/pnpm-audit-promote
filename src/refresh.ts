@@ -7,20 +7,20 @@ import {
   readAuditLevel,
 } from './workspace';
 import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor, type PnpmRunner } from './pnpm';
-import { mergeMinimumReleaseAgeExclude } from './workspaceYamlPnpm11';
 import {
   removeNodeModulesFolders,
   removePackageJsonOverrides,
   removePnpmLockFile,
   removeWorkspaceOverridesBlock,
 } from './cleanup';
-import { getDirectDepCatalogBumps, extractMinimumPatchedVersions } from './audit/parseAdvisories';
+import { getDirectDepCatalogBumps } from './audit/parseAdvisories';
 import {
   applyPackageJsonDepBumps,
   getDirectDepPackageJsonBumps,
 } from './audit/bumpPackageJsonDeps';
 import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
+import { guardWorkspaceOverrideReleaseAge } from './audit/releaseAge';
 import { migrateYamlOverridesToPackageJson } from './audit/ignoreWorkspaceMigration';
 import { applyCatalogUpdates } from './catalog';
 import {
@@ -91,6 +91,13 @@ export interface RefreshOptions {
    * warning). Defaults to true.
    */
   allowMajor?: boolean;
+  /**
+   * When false, skip the post-audit release-age guard that drops overrides
+   * pinning a version too fresh to satisfy the user's `minimumReleaseAge`
+   * gate. Defaults to true. Disable for fully offline runs where registry
+   * publish times cannot be fetched.
+   */
+  releaseAgeCheck?: boolean;
   /**
    * When true (default), prints a terminal-pretty summary at the end
    * describing direct/transitive package changes and resolved CVEs.
@@ -168,15 +175,9 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
 
   const initial = await captureInitialState(state, pnpm, logger, { skipAudit, dryRun });
 
-  // pnpm 11 enforces a global `minimumReleaseAge` gate that, by default,
-  // rejects packages published <24h ago — including the very patches
-  // `pnpm audit --fix` would install. Pre-seed only the *specific*
-  // advisory-fix versions into `minimumReleaseAgeExclude` so the gate
-  // continues to protect every other package (REQ-PNPM11-009/010).
-  if (!dryRun && (state.pnpmMajor ?? 0) >= 11 && initial.preCleanupAuditRaw) {
-    const entries = extractMinimumPatchedVersions(initial.preCleanupAuditRaw);
-    state.seedMinimumReleaseAgeExcludes(entries, logger);
-  }
+  // The tool never adds or modifies `minimumReleaseAgeExclude` in
+  // `pnpm-workspace.yaml` (REQ-PNPM11-011). The user's release-age gate —
+  // including their exclude list — is preserved verbatim across the run.
 
   await runCleanupPhase(state, progressLogger);
 
@@ -190,6 +191,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
       skipDedupe: Boolean(options.skipDedupe),
       allowMajor: options.allowMajor ?? true,
+      releaseAgeCheck: options.releaseAgeCheck ?? true,
       dryRun,
       preCleanupAuditRaw: initial.preCleanupAuditRaw,
       ignoreWorkspace: options.ignoreWorkspace ?? false,
@@ -416,6 +418,7 @@ async function runAuditPhase(
   opts: {
     skipDedupe: boolean;
     allowMajor: boolean;
+    releaseAgeCheck: boolean;
     dryRun: boolean;
     preCleanupAuditRaw: string;
     ignoreWorkspace: boolean;
@@ -437,7 +440,7 @@ async function runAuditPhase(
     postCleanupAuditStdout,
     opts.preCleanupAuditRaw,
   );
-  await auditFix(state, pnpm, progressLogger);
+  await auditFix(state, pnpm, progressLogger, { releaseAgeCheck: opts.releaseAgeCheck });
 
   // Under `--ignore-workspace`, pnpm deliberately ignores pnpm-workspace.yaml,
   // including any overrides `pnpm audit --fix` just wrote into it. Migrate
@@ -564,7 +567,12 @@ async function preAuditCatalogBump(
   }));
 }
 
-async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger): Promise<void> {
+async function auditFix(
+  state: WorkspaceState,
+  pnpm: PnpmRunner,
+  logger: Logger,
+  options: { releaseAgeCheck: boolean },
+): Promise<void> {
   logger.step('Apply pnpm audit fixes');
   // pnpm 11 made `--fix` require an explicit value (`override` or `update`)
   // and rejects the bare flag with ERR_PNPM_INVALID_FIX_OPTION. We always
@@ -586,18 +594,20 @@ async function auditFix(state: WorkspaceState, pnpm: PnpmRunner, logger: Logger)
     logger.detail('Detected pnpm-workspace.yaml created by `pnpm audit --fix`.');
   }
 
-  // pnpm 11's `audit --fix` writes `minimumReleaseAgeExclude` entries into
-  // pnpm-workspace.yaml so the patched versions are not blocked by the
-  // global `minimumReleaseAge` gate. Merge those additions into our desired
-  // snapshot before override promotion (which writes a fresh file) so we
-  // don't silently discard the security-exclude list.
-  if (state.hasWorkspaceYaml && (state.pnpmMajor ?? 0) >= 11) {
-    const onDisk = state.readWorkspaceYaml();
-    const merged = mergeMinimumReleaseAgeExclude(state.desiredWorkspaceYaml, onDisk);
-    if (merged !== state.desiredWorkspaceYaml) {
-      logger.detail('Merged `minimumReleaseAgeExclude` entries written by pnpm 11 audit --fix.');
-      state.desiredWorkspaceYaml = merged;
-    }
+  // pnpm 11's `audit --fix` appends the patched version of every fixed
+  // advisory to the top-level `minimumReleaseAgeExclude` block. The tool must
+  // never expand that list (REQ-PNPM11-011): reset it to the user's original
+  // on disk *before* the override-promotion pass below reads (and would
+  // otherwise re-serialise) the file, so the user's exclude list is preserved
+  // verbatim.
+  state.resetMinimumReleaseAgeExclude(logger);
+
+  // REQ-PNPM11-012: because the exclude list was just reset, an override pnpm
+  // pinned to a too-fresh patched version would make the reinstall below fail
+  // under pnpm's strict release-age resolution. Drop any such override (rather
+  // than re-expand the exclude list) so the install keeps working.
+  if (options.releaseAgeCheck) {
+    await guardWorkspaceOverrideReleaseAge(state, pnpm, logger);
   }
 
   // Safety net: promote any catalog-eligible overrides into the catalog.

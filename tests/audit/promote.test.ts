@@ -134,7 +134,7 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
       pnpm?: { overrides?: Record<string, string> };
     };
     const overrides = parsed.pnpm?.overrides ?? {};
-    expect(overrides['vite@>=7.0.0 <=7.3.1']).toBe('>=7.3.2');
+    expect(overrides['vite@>=7.0.0 <=7.3.1']).toBe('^7.3.2');
     expect(overrides['vite@>=7.1.0 <=7.3.1']).toBeUndefined();
     expect(overrides['rollup@>=4.0.0 <=4.58.0']).toBe('>=4.59.0');
   });
@@ -163,7 +163,7 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
       pnpm?: { overrides?: Record<string, string> };
     };
     const overrides = parsed.pnpm?.overrides ?? {};
-    expect(overrides['webpack@>=5.49.0 <=5.104.0']).toBe('>=5.104.1');
+    expect(overrides['webpack@>=5.49.0 <=5.104.0']).toBe('^5.104.1');
     expect(overrides['webpack@>=5.49.0 <5.104.0']).toBeUndefined();
   });
 
@@ -193,7 +193,7 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     const overrides = parsed.pnpm?.overrides ?? {};
     const keys = Object.keys(overrides).filter((k) => k.startsWith('serialize-javascript@'));
     expect(keys).toEqual(['serialize-javascript@<7.0.5']);
-    expect(overrides['serialize-javascript@<7.0.5']).toBe('>=7.0.5');
+    expect(overrides['serialize-javascript@<7.0.5']).toBe('^7.0.5');
   });
 
   it('REQ-OVERRIDES-005, REQ-PNPM11-007: collapses open-ended (no lower bound) qualified package.json overrides', () => {
@@ -234,11 +234,11 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
 
     const tarKeys = keys.filter((k) => k.startsWith('tar@'));
     expect(tarKeys).toEqual(['tar@<=7.5.10']);
-    expect(overrides['tar@<=7.5.10']).toBe('>=7.5.11');
+    expect(overrides['tar@<=7.5.10']).toBe('^7.5.11');
 
     const sjKeys = keys.filter((k) => k.startsWith('serialize-javascript@'));
     expect(sjKeys).toEqual(['serialize-javascript@<7.0.5']);
-    expect(overrides['serialize-javascript@<7.0.5']).toBe('>=7.0.5');
+    expect(overrides['serialize-javascript@<7.0.5']).toBe('^7.0.5');
 
     expect(overrides['postcss@<8.5.10']).toBe('>=8.5.10');
   });
@@ -374,7 +374,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const state = writeWorkspace(yaml);
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
     expect(out).toContain('axios@>=1.0.0 <1.15.2');
-    expect(out).toContain("'>=1.15.2'");
+    expect(out).toContain("'^1.15.2'");
     expect(out).not.toContain('<1.15.1');
   });
 
@@ -393,7 +393,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
 
     const matches = out.match(/serialize-javascript@[^'"\s]+/g) ?? [];
     expect(matches).toEqual(['serialize-javascript@<7.0.5']);
-    expect(out).toContain("'>=7.0.5'");
+    expect(out).toContain("'^7.0.5'");
   });
 
   it('REQ-OVERRIDES-005: collapses equivalent workspace override selectors keeping the first occurrence', () => {
@@ -402,8 +402,17 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
       "catalog: {}\n\noverrides:\n  'foo@>=1.0.0 <2.0.0': '>=1.5.0'\n  'foo@>=1.0.0  <2.0.0': '>=1.7.0'\n";
     const state = writeWorkspace(yaml);
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
-    expect(out).toContain("'foo@>=1.0.0 <2.0.0': '>=1.7.0'");
+    expect(out).toContain("'foo@>=1.0.0 <2.0.0': '^1.7.0'");
     expect(out).not.toContain('foo@>=1.0.0  <2.0.0');
+  });
+
+  it('REQ-OVERRIDES-005: pre-1.0 merged floors stay caret-capped within semver caret rules', () => {
+    const yaml =
+      "catalog: {}\n\noverrides:\n  'tiny@>=0.7.0 <0.8.0': '>=0.7.4'\n  'tiny@>=0.7.1 <0.8.0': '>=0.7.5'\n";
+    const state = writeWorkspace(yaml);
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    expect(out).toContain("'tiny@>=0.7.0 <0.8.0': '^0.7.5'");
+    expect(out).not.toContain('tiny@>=0.7.1 <0.8.0');
   });
 
   it('REQ-OVERRIDES-005: does not merge workspace overrides for different bare packages', () => {
@@ -422,7 +431,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
     expect(out).toContain("react: '18.3.1'"); // promoted
     expect(out).toContain('axios@>=1.0.0 <1.15.2');
-    expect(out).toContain("'>=1.15.2'");
+    expect(out).toContain("'^1.15.2'");
     expect(out).not.toContain('<1.15.1');
   });
 
@@ -453,12 +462,12 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     // Exactly one tar entry: the broadest selector with the strongest fix.
     const tarMatches = out.match(/tar@[^'"\s]+/g) ?? [];
     expect(tarMatches).toEqual(['tar@<=7.5.10']);
-    expect(out).toContain("'>=7.5.11'");
+    expect(out).toContain("'^7.5.11'");
 
     // Exactly one serialize-javascript entry collapsed to broadest selector.
     const sjMatches = out.match(/serialize-javascript@[^'"\s]+/g) ?? [];
     expect(sjMatches).toEqual(['serialize-javascript@<7.0.5']);
-    expect(out).toContain("'>=7.0.5'");
+    expect(out).toContain("'^7.0.5'");
 
     // postcss is alone and should remain untouched.
     expect(out).toContain('postcss@<8.5.10');
@@ -481,7 +490,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
     const tarMatches = out.match(/tar@[^'":\s]+/g) ?? [];
     expect(tarMatches).toEqual(['tar@<=7.5.10']);
-    expect(out).toContain("'>=7.5.11'");
+    expect(out).toContain("'^7.5.11'");
   });
 });
 

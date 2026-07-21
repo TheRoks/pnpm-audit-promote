@@ -4,8 +4,8 @@ import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
+import { restoreMinimumReleaseAgeExclude } from './releaseAgeExclude';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError, WorkspaceReadError } from './errors';
-import { addMinimumReleaseAgeExcludeEntries } from './workspaceYamlPnpm11';
 
 /**
  * Mutable per-run workspace state, populated once and read by helper modules.
@@ -51,8 +51,7 @@ export class WorkspaceState {
   /**
    * Major version of the pnpm binary on PATH (10, 11, ...). `null` when
    * detection failed or has not been performed yet. Set once via
-   * {@link recordPnpmMajor} during `prepareRun`. pnpm 11 triggers
-   * extra workspace-yaml handling (see {@link seedMinimumReleaseAgeExcludes}).
+   * {@link recordPnpmMajor} during `prepareRun`.
    */
   pnpmMajor: number | null = null;
 
@@ -111,37 +110,6 @@ export class WorkspaceState {
     this.pnpmMajor = major;
   }
 
-  /**
-   * Pre-seed pnpm 11's `minimumReleaseAgeExclude` block in
-   * `pnpm-workspace.yaml` with the `name: minimumPatchedVersion` entries
-   * passed in. This unblocks `pnpm audit --fix override` (and the
-   * subsequent install) from rejecting freshly-published patched versions
-   * without disturbing the user’s global `minimumReleaseAge` setting —
-   * the supply-chain gate continues to apply to every *other* package.
-   *
-   * No-op when pnpm major is not 11+, when no `pnpm-workspace.yaml`
-   * exists, when `entries` is empty, or when the workspace state is in
-   * dry-run mode (writes are suppressed).
-   *
-   * Per REQ-PNPM11-010, this method never touches the top-level
-   * `minimumReleaseAge` value.
-   */
-  seedMinimumReleaseAgeExcludes(entries: ReadonlyMap<string, string>, logger: Logger): void {
-    if (entries.size === 0) return;
-    if (this.pnpmMajor === null || this.pnpmMajor < 11) return;
-    if (!this.hasWorkspaceYaml) return;
-    const next = addMinimumReleaseAgeExcludeEntries(this.desiredWorkspaceYaml, entries);
-    if (next === this.desiredWorkspaceYaml) return;
-    this.desiredWorkspaceYaml = next;
-    this.saveWorkspaceYaml(next);
-    const names = [...entries.keys()].sort();
-    logger.detail(
-      `Pre-seeded ${entries.size} \`minimumReleaseAgeExclude\` entr${
-        entries.size === 1 ? 'y' : 'ies'
-      } for advisory fixes: ${names.join(', ')}.`,
-    );
-  }
-
   detectEol(): void {
     try {
       const content = fs.readFileSync(this.workspaceYaml, 'utf8');
@@ -189,6 +157,23 @@ export class WorkspaceState {
     this.originalWorkspaceYaml = '';
     this.desiredWorkspaceYaml = fs.readFileSync(this.workspaceYaml, 'utf8');
     return true;
+  }
+
+  /**
+   * Reset the on-disk `minimumReleaseAgeExclude` block to the user's original
+   * content (or remove it when the user had none), discarding any entries
+   * pnpm 11's `audit --fix` appended. The tool must never expand that list
+   * (REQ-PNPM11-011). No-op when no workspace yaml exists or when the block is
+   * already unchanged. Honours `dryRun` via {@link saveWorkspaceYaml}.
+   */
+  resetMinimumReleaseAgeExclude(logger: Logger): void {
+    if (!this.hasWorkspaceYaml) return;
+    const current = this.readWorkspaceYaml();
+    const next = restoreMinimumReleaseAgeExclude(current, this.originalWorkspaceYaml);
+    if (next === current) return;
+    this.desiredWorkspaceYaml = next;
+    this.saveWorkspaceYaml(next);
+    logger.detail('Discarded `minimumReleaseAgeExclude` entries written by pnpm audit --fix.');
   }
 
   /**

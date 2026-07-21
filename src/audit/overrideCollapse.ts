@@ -7,17 +7,18 @@ import {
 } from '../semverUtil';
 
 /**
- * Pick the stronger (higher minimum) of two `>=X.Y.Z`-style fix ranges.
+ * Pick the stronger (higher minimum) of two fix ranges and emit a
+ * major-capped floor (`^X.Y.Z`) so merged survivors do not float into the
+ * next major.
  * Returns null when either input has no derivable minimum version.
  */
 export function strongestFixRange(a: string, b: string): string | null {
-  if (a === b) return a;
-
   const minA = semver.minVersion(a)?.version;
   const minB = semver.minVersion(b)?.version;
   if (!minA || !minB) return null;
 
-  return compareSemVer(minA, minB) >= 0 ? `>=${minA}` : `>=${minB}`;
+  const strongestMin = compareSemVer(minA, minB) >= 0 ? minA : minB;
+  return `^${strongestMin}`;
 }
 
 const ENTRY_RE = /^([ \t]*)"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(,?)\s*$/;

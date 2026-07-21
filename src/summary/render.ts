@@ -9,6 +9,7 @@ import { getBarePackageName } from '../semverUtil';
 import { diffAdvisories, diffCatalog, diffOverrides } from './collect';
 import {
   type AdvisorySummary,
+  type AuditStatus,
   type CatalogChange,
   type PackageJsonDepChange,
   type RunSummaryData,
@@ -28,10 +29,15 @@ export interface RenderOptions {
 export function renderTerminalSummary(data: RunSummaryData, options: RenderOptions = {}): string {
   const c = options.color === false ? NO_COLOR : ANSI_COLOR;
   const width = options.width ?? 64;
+  const auditStatus: AuditStatus =
+    data.auditStatus ?? (data.auditSkipped || data.dryRun ? 'skipped' : 'complete');
   const directChanges = diffCatalog(data.originalCatalog, data.finalCatalog);
   const pkgJsonChanges: readonly PackageJsonDepChange[] = data.pkgJsonDepChanges;
   const overrideChanges = diffOverrides(data.originalOverrides, data.finalOverrides);
-  const { fixed, remaining } = diffAdvisories(data.initialAdvisories, data.finalAdvisories);
+  const { fixed, remaining } =
+    auditStatus === 'complete'
+      ? diffAdvisories(data.initialAdvisories, data.finalAdvisories)
+      : { fixed: [], remaining: [] };
 
   const transitivePackages = new Set<string>();
   for (const o of overrideChanges) transitivePackages.add(getBarePackageName(o.selector));
@@ -61,6 +67,11 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
       `  ${c.yellow('⚠')}  ${c.yellow('Audit phase skipped (--no-audit); vulnerability data is incomplete.')}`,
     );
     out.push('');
+  } else if (auditStatus === 'failed') {
+    out.push(
+      `  ${c.yellow('⚠')}  ${c.yellow('Final audit verification failed; vulnerability status is unknown.')}`,
+    );
+    out.push('');
   }
 
   // Headline metrics
@@ -79,20 +90,31 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
         }`;
   const fixedCount = fixed.length;
   const fixedLine =
-    fixedCount > 0
-      ? `${c.bold(c.green(String(fixedCount)))} ${pluralize(fixedCount, 'vulnerability', 'vulnerabilities')} fixed${
-          cves.size > 0 ? c.dim(` (${cves.size} ${pluralize(cves.size, 'CVE')} resolved)`) : ''
-        }`
-      : `${c.bold('0')} vulnerabilities fixed`;
+    auditStatus === 'failed'
+      ? `${c.bold(c.yellow('?'))} fix status not verified`
+      : auditStatus === 'skipped'
+        ? `${c.bold(c.yellow('—'))} vulnerability audit not run`
+        : fixedCount > 0
+          ? `${c.bold(c.green(String(fixedCount)))} ${pluralize(fixedCount, 'vulnerability', 'vulnerabilities')} fixed${
+              cves.size > 0 ? c.dim(` (${cves.size} ${pluralize(cves.size, 'CVE')} resolved)`) : ''
+            }`
+          : `${c.bold('0')} vulnerabilities fixed`;
   const remainingLine =
-    remaining.length === 0
-      ? `${c.bold(c.green('0'))} remaining`
-      : `${c.bold(c.red(String(remaining.length)))} ${pluralize(remaining.length, 'vulnerability', 'vulnerabilities')} remaining`;
+    auditStatus === 'failed'
+      ? `${c.bold(c.yellow('?'))} remaining vulnerabilities unknown`
+      : auditStatus === 'skipped'
+        ? `${c.bold(c.yellow('—'))} remaining vulnerabilities not evaluated`
+        : remaining.length === 0
+          ? `${c.bold(c.green('0'))} remaining`
+          : `${c.bold(c.red(String(remaining.length)))} ${pluralize(remaining.length, 'vulnerability', 'vulnerabilities')} remaining`;
 
   out.push(`  ${c.green('●')} ${directLine}`);
   out.push(`  ${c.green('●')} ${transitiveLine}`);
-  out.push(`  ${c.green('●')} ${fixedLine}`);
-  out.push(`  ${remaining.length === 0 ? c.green('●') : c.red('●')} ${remainingLine}`);
+  const auditMarker = auditStatus === 'complete' ? c.green('●') : c.yellow('●');
+  out.push(`  ${auditMarker} ${fixedLine}`);
+  out.push(
+    `  ${auditStatus === 'complete' && remaining.length > 0 ? c.red('●') : auditMarker} ${remainingLine}`,
+  );
   out.push('');
 
   // Direct (catalog) bumps
@@ -179,21 +201,34 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   }
   out.push('');
 
-  // Fixed vulnerabilities
-  out.push(`  ${c.bold('Vulnerabilities fixed')}`);
-  out.push(`  ${rule}`);
-  if (fixed.length === 0) {
-    out.push(`  ${c.dim('No vulnerabilities were resolved during this run.')}`);
-  } else {
-    renderAdvisoryRows(fixed, out, c);
-  }
-  out.push('');
-
-  // Remaining vulnerabilities (only if any)
-  if (remaining.length > 0) {
-    out.push(`  ${c.bold(c.red('Vulnerabilities remaining'))}`);
+  if (auditStatus === 'complete') {
+    // Fixed vulnerabilities
+    out.push(`  ${c.bold('Vulnerabilities fixed')}`);
     out.push(`  ${rule}`);
-    renderAdvisoryRows(remaining, out, c);
+    if (fixed.length === 0) {
+      out.push(`  ${c.dim('No vulnerabilities were resolved during this run.')}`);
+    } else {
+      renderAdvisoryRows(fixed, out, c);
+    }
+    out.push('');
+
+    // Remaining vulnerabilities (only if any)
+    if (remaining.length > 0) {
+      out.push(`  ${c.bold(c.red('Vulnerabilities remaining'))}`);
+      out.push(`  ${rule}`);
+      renderAdvisoryRows(remaining, out, c);
+      out.push('');
+    }
+  } else {
+    out.push(`  ${c.bold('Vulnerability verification')}`);
+    out.push(`  ${rule}`);
+    out.push(
+      `  ${c.dim(
+        auditStatus === 'failed'
+          ? 'Final audit failed; fixed and remaining vulnerabilities could not be verified.'
+          : 'Audit was not run; vulnerability changes were not evaluated.',
+      )}`,
+    );
     out.push('');
   }
 

@@ -4,6 +4,7 @@
  */
 export type {
   AdvisorySummary,
+  AuditStatus,
   CatalogChange,
   OverrideChange,
   PackageJsonDepChange,

@@ -36,7 +36,7 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   `savePrefix: ''`); re-applying the snapshot preserves the user's
   configuration across each invocation._
 - **REQ-CORE-004** — `refreshDeps` SHALL resolve to a `RefreshResult`
-  containing `canceled`, `durationMs`, `catalogChanges`, `overrideChanges`,
+  containing `canceled`, `durationMs`, `auditStatus`, `catalogChanges`, `overrideChanges`,
   `pkgJsonDepChanges`, `initialAdvisories`, `finalAdvisories`,
   `fixedAdvisories`, and `summary`. When `canceled` is `true`, `summary`
   SHALL be `null`.
@@ -306,6 +306,13 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-SUMMARY-008** — When the workspace root `package.json` contains a
   `name` field, the terminal summary SHALL display it as the run heading.
   When `name` is absent, a generic heading SHALL be used.
+- **REQ-SUMMARY-009** — The final audit verification SHALL be reported as
+  `complete`, `failed`, or `skipped`. Fixed and remaining vulnerability counts
+  SHALL only be computed when the status is `complete`; failed or skipped
+  verification SHALL be rendered as unknown or not evaluated and SHALL NOT be
+  represented as zero remaining vulnerabilities. A valid audit JSON payload
+  containing an `advisories` object SHALL be complete regardless of command
+  exit code.
 
 ## CLI — command-line interface
 

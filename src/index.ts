@@ -1,6 +1,7 @@
 export { refreshDeps, type RefreshOptions, type RefreshResult } from './refresh';
 export type {
   AdvisorySummary,
+  AuditStatus,
   CatalogChange,
   OverrideChange,
   RunSummaryData,

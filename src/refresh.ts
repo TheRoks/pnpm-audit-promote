@@ -36,6 +36,7 @@ import { collectRunSummary, renderRunSummary } from './summary/emit';
 import { formatDuration } from './summary/render';
 import type {
   AdvisorySummary,
+  AuditStatus,
   CatalogChange,
   OverrideChange,
   PackageJsonDepChange,
@@ -126,6 +127,8 @@ export interface RefreshResult {
   canceled: boolean;
   /** Total wall-clock time spent in `refreshDeps`. */
   durationMs: number;
+  /** Final audit verification status. Always set on library-produced results. */
+  auditStatus?: AuditStatus;
   /** Direct-dependency catalog version changes. Empty when nothing changed. */
   catalogChanges: readonly CatalogChange[];
   /** Transitive overrides added or modified by `pnpm audit --fix`. */
@@ -214,6 +217,12 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     initialAdvisories: initial.initialAdvisories,
     pkgJsonDepChanges,
   });
+
+  if (summary.auditStatus === 'failed') {
+    logger.warn(
+      'Final audit verification failed; fixed and remaining vulnerability counts are unknown.',
+    );
+  }
 
   if (options.summary !== false) {
     renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
@@ -462,6 +471,7 @@ function canceledResult(durationMs: number): RefreshResult {
   return {
     canceled: true,
     durationMs,
+    auditStatus: 'skipped',
     catalogChanges: [],
     overrideChanges: [],
     initialAdvisories: [],
@@ -472,10 +482,16 @@ function canceledResult(durationMs: number): RefreshResult {
 }
 
 function summaryToResult(summary: RunSummaryData): RefreshResult {
-  const { fixed } = diffAdvisories(summary.initialAdvisories, summary.finalAdvisories);
+  const auditStatus =
+    summary.auditStatus ?? (summary.auditSkipped || summary.dryRun ? 'skipped' : 'complete');
+  const fixed =
+    auditStatus === 'complete'
+      ? diffAdvisories(summary.initialAdvisories, summary.finalAdvisories).fixed
+      : [];
   return {
     canceled: false,
     durationMs: summary.durationMs,
+    auditStatus,
     catalogChanges: diffCatalog(summary.originalCatalog, summary.finalCatalog),
     overrideChanges: diffOverrides(summary.originalOverrides, summary.finalOverrides),
     initialAdvisories: summary.initialAdvisories,

@@ -1,5 +1,8 @@
 export type Severity = 'critical' | 'high' | 'moderate' | 'low' | 'info' | 'unknown';
 
+/** Outcome of the final vulnerability verification audit. */
+export type AuditStatus = 'complete' | 'failed' | 'skipped';
+
 export interface AdvisorySummary {
   id: string;
   module: string;
@@ -49,6 +52,13 @@ export interface RunSummaryData {
   toolVersion: string;
   durationMs: number;
   dryRun: boolean;
+  /**
+   * Final audit verification status. Library-produced summaries always set
+   * this field; it remains optional so callers constructing legacy summary
+   * objects do not break.
+   */
+  auditStatus?: AuditStatus;
+  /** @deprecated Use `auditStatus === 'skipped'` instead. */
   auditSkipped: boolean;
   originalCatalog: ReadonlyMap<string, string>;
   finalCatalog: ReadonlyMap<string, string>;

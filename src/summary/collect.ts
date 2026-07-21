@@ -23,21 +23,36 @@ const PNPM_AUDIT_SEVERITIES = new Set<Severity>([
   'unknown',
 ]);
 
+interface AuditAdvisoryExtraction {
+  complete: boolean;
+  advisories: AdvisorySummary[];
+}
+
 /**
  * Parse `pnpm audit --json` stdout into a normalized advisory list.
  * Tolerates malformed input by returning an empty array.
  */
 export function extractAdvisories(jsonStdout: string): AdvisorySummary[] {
-  if (!jsonStdout.trim()) return [];
+  return extractAdvisoriesWithStatus(jsonStdout).advisories;
+}
+
+/**
+ * Internal status-aware audit parser. A valid audit response must contain an
+ * `advisories` object; malformed and error-shaped payloads are incomplete.
+ */
+export function extractAdvisoriesWithStatus(jsonStdout: string): AuditAdvisoryExtraction {
+  if (!jsonStdout.trim()) return { complete: false, advisories: [] };
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonStdout);
   } catch {
-    return [];
+    return { complete: false, advisories: [] };
   }
-  if (!parsed || typeof parsed !== 'object') return [];
+  if (!parsed || typeof parsed !== 'object') return { complete: false, advisories: [] };
   const advisories = (parsed as { advisories?: Record<string, unknown> }).advisories;
-  if (!advisories || typeof advisories !== 'object') return [];
+  if (!advisories || typeof advisories !== 'object' || Array.isArray(advisories)) {
+    return { complete: false, advisories: [] };
+  }
 
   const out: AdvisorySummary[] = [];
   for (const [id, entry] of Object.entries(advisories)) {
@@ -59,7 +74,7 @@ export function extractAdvisories(jsonStdout: string): AdvisorySummary[] {
       cves,
     });
   }
-  return out;
+  return { complete: true, advisories: out };
 }
 
 export function bumpTier(before: string, after: string): CatalogChange['bump'] {

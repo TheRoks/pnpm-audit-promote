@@ -12,6 +12,7 @@ import {
   type PackageJsonDepChange,
   type RunSummaryData,
 } from '../src/summary';
+import { extractAdvisoriesWithStatus } from '../src/summary/collect';
 
 describe('extractAdvisories', () => {
   it('REQ-AUDIT-008: parses a typical pnpm audit JSON payload', () => {
@@ -52,6 +53,24 @@ describe('extractAdvisories', () => {
     });
     expect(extractAdvisories(stdout)[0]?.severity).toBe('unknown');
   });
+
+  it('REQ-SUMMARY-009: distinguishes complete audit payloads from unavailable results', () => {
+    const withAdvisory = extractAdvisoriesWithStatus(
+      JSON.stringify({ advisories: { '1': { module_name: 'x', severity: 'high' } } }),
+    );
+    const empty = extractAdvisoriesWithStatus(JSON.stringify({ advisories: {} }));
+
+    expect(withAdvisory.complete).toBe(true);
+    expect(withAdvisory.advisories).toHaveLength(1);
+    expect(empty).toEqual({ complete: true, advisories: [] });
+  });
+
+  it.each(['', 'not json', JSON.stringify({ error: { message: 'registry unavailable' } })])(
+    'REQ-SUMMARY-009: marks malformed or error-shaped audit output as failed (%s)',
+    (stdout) => {
+      expect(extractAdvisoriesWithStatus(stdout)).toEqual({ complete: false, advisories: [] });
+    },
+  );
 });
 
 describe('diffCatalog', () => {
@@ -320,6 +339,33 @@ describe('renderTerminalSummary', () => {
   it('REQ-CORE-005: shows audit-skipped note when applicable', () => {
     const out = renderTerminalSummary(fixture({ auditSkipped: true }), { color: false });
     expect(out).toMatch(/Audit phase skipped/);
+  });
+
+  it('REQ-SUMMARY-009: renders failed audit verification without zero or fixed claims', () => {
+    const out = renderTerminalSummary(fixture({ auditStatus: 'failed' }), { color: false });
+
+    expect(out).toMatch(/Final audit verification failed/);
+    expect(out).toMatch(/fix status not verified/);
+    expect(out).toMatch(/remaining vulnerabilities unknown/);
+    expect(out).not.toMatch(/0 remaining/);
+    expect(out).not.toMatch(/1 vulnerability fixed/);
+  });
+
+  it('REQ-SUMMARY-009: renders skipped audit verification as not evaluated', () => {
+    const out = renderTerminalSummary(fixture({ auditStatus: 'skipped', auditSkipped: true }), {
+      color: false,
+    });
+
+    expect(out).toMatch(/vulnerability audit not run/);
+    expect(out).toMatch(/remaining vulnerabilities not evaluated/);
+    expect(out).not.toMatch(/0 remaining/);
+  });
+
+  it('REQ-SUMMARY-009: preserves complete behavior for legacy summaries without auditStatus', () => {
+    const out = renderTerminalSummary(fixture(), { color: false });
+
+    expect(out).toMatch(/1 vulnerability fixed/);
+    expect(out).toMatch(/0 remaining/);
   });
 
   it('REQ-SUMMARY-001: renders removed override selectors with a removed-marker row', () => {

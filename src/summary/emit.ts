@@ -3,9 +3,14 @@ import * as path from 'node:path';
 import type { Logger } from '../logger';
 import type { PnpmRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
-import { extractAdvisories, readAllOverrides, readCatalogSnapshot, safeReadFile } from './collect';
+import {
+  extractAdvisoriesWithStatus,
+  readAllOverrides,
+  readCatalogSnapshot,
+  safeReadFile,
+} from './collect';
 import { renderTerminalSummary } from './render';
-import type { AdvisorySummary, PackageJsonDepChange, RunSummaryData } from './types';
+import type { AdvisorySummary, AuditStatus, PackageJsonDepChange, RunSummaryData } from './types';
 
 /**
  * Inputs needed to assemble a {@link RunSummaryData} after the orchestrator
@@ -40,12 +45,17 @@ export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<Ru
   const finalOverrides = readAllOverrides(finalYaml, finalPjText);
 
   let finalAdvisories: AdvisorySummary[] = [];
+  let auditStatus: AuditStatus = skipAudit || dryRun ? 'skipped' : 'failed';
   if (!skipAudit && !dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
-      finalAdvisories = extractAdvisories(stdout);
+      const extraction = extractAdvisoriesWithStatus(stdout);
+      if (extraction.complete) {
+        finalAdvisories = extraction.advisories;
+        auditStatus = 'complete';
+      }
     } catch {
-      // Best-effort: leave the remaining-vuln list empty rather than fail the run.
+      // Best-effort: preserve a failed status rather than aborting the run.
     }
   }
 
@@ -55,6 +65,7 @@ export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<Ru
     toolVersion: args.toolVersion,
     durationMs: args.durationMs,
     dryRun,
+    auditStatus,
     auditSkipped: skipAudit,
     originalCatalog: args.originalCatalog,
     finalCatalog,

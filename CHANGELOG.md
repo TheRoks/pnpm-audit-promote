@@ -1,5 +1,12 @@
 # pnpm-audit-promote
 
+## [1.9.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.8.0...v1.9.0) (2026-07-21)
+
+
+### Features
+
+* add audit status tracking to refreshDeps and related summary functions ([#103](https://github.com/TheRoks/pnpm-audit-promote/issues/103)) ([2bdae23](https://github.com/TheRoks/pnpm-audit-promote/commit/2bdae23e7a5ee88e024f4b2dccf202149149de87))
+
 ## [1.8.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.7.0...v1.8.0) (2026-06-08)
 
 

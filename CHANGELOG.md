@@ -1,5 +1,15 @@
 # pnpm-audit-promote
 
+## Unreleased
+
+### Added
+
+- Support pnpm 12 while retaining pnpm 10 and 11 compatibility.
+- Read pnpm 12 audit settings, adopt workspace YAML generated during install,
+  and skip redundant explicit dedupe when `autoDedupe` is enabled.
+- Add opt-in `auditFixMode: 'update'` / `--audit-fix-mode update` for pnpm 11+.
+- Exercise pnpm 12 in real-pnpm integration coverage, including macOS and Windows.
+
 ## [1.9.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.8.0...v1.9.0) (2026-07-21)
 
 

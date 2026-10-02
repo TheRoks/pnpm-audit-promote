@@ -1,4 +1,4 @@
-export { refreshDeps, type RefreshOptions, type RefreshResult } from './refresh';
+export { refreshDeps, type AuditFixMode, type RefreshOptions, type RefreshResult } from './refresh';
 export type {
   AdvisorySummary,
   AuditStatus,

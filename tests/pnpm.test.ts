@@ -485,6 +485,21 @@ describe('PnpmRunner version()', () => {
     );
   });
 
+  it('REQ-PNPM12-009: detects the version from the explicitly configured pnpm executable', async () => {
+    spawnMock.mockImplementationOnce(() => makeChildWithStdout(0, '12.8.1\n'));
+    const runner = createPnpmRunner({
+      cwd: '/tmp/workspace',
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+    expect(await runner.version()).toBe('12.8.1');
+    expect(spawnMock).toHaveBeenCalledWith(
+      EXPLICIT_PNPM_PATH,
+      ['--version'],
+      expect.objectContaining({ cwd: '/tmp/workspace' }),
+    );
+  });
+
   it('REQ-CORE-002: returns an empty string in dry-run mode', async () => {
     const runner = createPnpmRunner({
       cwd: '/tmp/workspace',

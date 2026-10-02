@@ -19,7 +19,7 @@ export interface PnpmRunner {
 }
 
 /**
- * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, ...) into its major
+ * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, `12.0.0`, ...) into its major
  * component. Returns `null` when the input cannot be interpreted, which the
  * caller should treat as "pnpm 10 (legacy) behavior".
  */
@@ -86,7 +86,7 @@ export function createPnpmRunner({
         return cachedVersion;
       }
       cachedVersion = await new Promise<string>((resolve) => {
-        const child = spawn(PNPM, ['--version'], {
+        const child = spawn(executable, ['--version'], {
           cwd,
           stdio: ['ignore', 'pipe', 'ignore'],
         });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as path from 'node:path';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import pc from 'picocolors';
 import { refreshDeps } from './refresh';
 import { createLogger, type LogLevel } from './logger';
@@ -14,6 +14,7 @@ interface CliOptions {
   yes?: boolean;
   dryRun: boolean;
   audit: boolean;
+  auditFixMode: 'override' | 'update';
   dedupe: boolean;
   allowMajor: boolean;
   releaseAgeCheck: boolean;
@@ -41,6 +42,11 @@ program
   .option('-y, --yes', 'Alias for --force')
   .option('-n, --dry-run', 'Plan and log changes without writing files or invoking pnpm', false)
   .option('--no-audit', 'Skip the pnpm audit and catalog promotion phase')
+  .addOption(
+    new Option('--audit-fix-mode <mode>', 'Choose how pnpm applies audit fixes')
+      .choices(['override', 'update'])
+      .default('override'),
+  )
   .option('--no-dedupe', 'Skip pnpm dedupe calls')
   .option(
     '--no-allow-major',
@@ -73,6 +79,7 @@ program
         force: opts.force || Boolean(opts.yes),
         dryRun: opts.dryRun,
         skipAudit: !opts.audit,
+        auditFixMode: opts.auditFixMode,
         skipDedupe: !opts.dedupe,
         allowMajor: opts.allowMajor,
         releaseAgeCheck: opts.releaseAgeCheck,

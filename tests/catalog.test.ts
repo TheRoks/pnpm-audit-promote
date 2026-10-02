@@ -27,6 +27,19 @@ describe('getCatalogNames', () => {
   });
 });
 
+describe('getCatalogVersions', () => {
+  it('REQ-PNPM12-008: ignores local workspace protocols containing version-like path segments', () => {
+    const yaml = [
+      'catalog:',
+      '  local-file: file:../lib-1.2.3',
+      '  local-link: link:../pkg-2.0.0',
+      '  workspace-package: workspace:^',
+      '  real-package: ^3.4.5',
+    ].join('\n');
+    expect(getCatalogVersions(yaml)).toEqual(new Map([['real-package', '3.4.5']]));
+  });
+});
+
 describe('applyCatalogUpdates', () => {
   it('REQ-CATALOG-001: updates a single catalog version preserving quoting style', () => {
     const out = applyCatalogUpdates(SAMPLE_LF, new Map([['react', '18.3.1']]));

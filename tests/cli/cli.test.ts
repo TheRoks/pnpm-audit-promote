@@ -85,6 +85,7 @@ describe('CLI: built dist/cli.js', () => {
     expect(r.stdout).toContain('--path');
     expect(r.stdout).toContain('--force');
     expect(r.stdout).toContain('--dry-run');
+    expect(r.stdout).toContain('--audit-fix-mode');
   });
 
   it('REQ-CLI-001: -h prints usage and exits 0', () => {
@@ -199,6 +200,33 @@ describe('CLI: built dist/cli.js', () => {
       '--ignore-workspace',
     ]);
     expect(r.status).toBe(0);
+  });
+
+  it('REQ-CLI-016: --audit-fix-mode update is rejected for a pnpm 10 workspace before mutation', () => {
+    const root = makeBasicFixture();
+    const lockPath = path.join(root, 'pnpm-lock.yaml');
+    fs.writeFileSync(lockPath, 'lockfileVersion: 9.0\n', 'utf8');
+    const beforeYaml = fs.readFileSync(path.join(root, 'pnpm-workspace.yaml'), 'utf8');
+    const r = runCli([
+      '--path',
+      root,
+      '--force',
+      '--dry-run',
+      '--audit-fix-mode',
+      'update',
+      '--no-summary',
+    ]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/requires a detectable pnpm 11 or newer/);
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'pnpm-workspace.yaml'), 'utf8')).toBe(beforeYaml);
+  });
+
+  it('REQ-CLI-016: rejects unknown audit fix modes with a usage error', () => {
+    const root = makeBasicFixture();
+    const r = runCli(['--path', root, '--audit-fix-mode', 'unsupported']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/allowed choices are override, update/i);
   });
 
   it('REQ-CLI-013: --verbose is accepted and exits 0 (and emits more output than default)', () => {

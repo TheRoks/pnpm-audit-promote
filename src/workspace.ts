@@ -5,6 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
 import { restoreMinimumReleaseAgeExclude } from './releaseAgeExclude';
+import { preservePrunedAuditIgnore } from './catalog';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError, WorkspaceReadError } from './errors';
 
 /**
@@ -36,7 +37,7 @@ export class WorkspaceState {
 
   /**
    * Snapshot of the *desired* pnpm-workspace.yaml content. Re-applied after
-   * every pnpm command, because pnpm 10 normalizes the file on install/up
+   * every pnpm command, because pnpm 10/11/12 may normalize the file on install/up
    * and silently drops settings (e.g. `savePrefix: ''`) and bumps catalog
    * versions.
    */
@@ -54,6 +55,9 @@ export class WorkspaceState {
    * {@link recordPnpmMajor} during `prepareRun`.
    */
   pnpmMajor: number | null = null;
+
+  /** Full target pnpm version when available, used to gate minor-version features. */
+  pnpmVersion: string | null = null;
 
   /**
    * Truly-original pnpm-workspace.yaml content as written by the user.
@@ -110,6 +114,10 @@ export class WorkspaceState {
     this.pnpmMajor = major;
   }
 
+  recordPnpmVersion(version: string | null): void {
+    this.pnpmVersion = version;
+  }
+
   detectEol(): void {
     try {
       const content = fs.readFileSync(this.workspaceYaml, 'utf8');
@@ -137,7 +145,7 @@ export class WorkspaceState {
   /**
    * Re-check whether `pnpm-workspace.yaml` exists on disk and update the
    * `hasWorkspaceYaml` flag accordingly. Useful after pnpm itself may have
-   * created the file mid-run (notably `pnpm 11 audit --fix override`, which
+   * created the file mid-run (notably `pnpm 11/12 audit --fix override`, which
    * writes its overrides to a new pnpm-workspace.yaml even when one did not
    * exist before).
    *
@@ -162,7 +170,7 @@ export class WorkspaceState {
   /**
    * Reset the on-disk `minimumReleaseAgeExclude` block to the user's original
    * content (or remove it when the user had none), discarding any entries
-   * pnpm 11's `audit --fix` appended. The tool must never expand that list
+   * pnpm 11/12's `audit --fix` appended. The tool must never expand that list
    * (REQ-PNPM11-011). No-op when no workspace yaml exists or when the block is
    * already unchanged. Honours `dryRun` via {@link saveWorkspaceYaml}.
    */
@@ -174,6 +182,20 @@ export class WorkspaceState {
     this.desiredWorkspaceYaml = next;
     this.saveWorkspaceYaml(next);
     logger.detail('Discarded `minimumReleaseAgeExclude` entries written by pnpm audit --fix.');
+  }
+
+  /**
+   * Adopt pnpm 12's intentional pruning of stale `audit.ignore` IDs without
+   * accepting unrelated YAML rewrites. The next restore/write applies this
+   * reduced ignore list together with the user's desired configuration.
+   */
+  preserveAuditIgnorePrune(logger: Logger): void {
+    if ((this.pnpmMajor ?? 0) < 12 || !this.hasWorkspaceYaml) return;
+    const current = this.readWorkspaceYaml();
+    const updated = preservePrunedAuditIgnore(this.desiredWorkspaceYaml, current);
+    if (updated === this.desiredWorkspaceYaml) return;
+    this.desiredWorkspaceYaml = updated;
+    logger.detail('Preserved pnpm 12 pruning of stale `audit.ignore` entries.');
   }
 
   /**
@@ -314,6 +336,53 @@ export function detectWorkspacePnpmMajor(pkgJsonPath: string): number | null {
   );
 }
 
+/** Detect an exact pnpm major.minor.patch from the target package.json. */
+export function detectWorkspacePnpmVersion(pkgJsonPath: string): string | null {
+  let parsed: { packageManager?: unknown; devEngines?: unknown };
+  try {
+    parsed = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as typeof parsed;
+  } catch {
+    return null;
+  }
+  return (
+    extractFullVersionFromPackageManager(parsed.packageManager) ??
+    extractFullVersionFromDevEngines(parsed.devEngines)
+  );
+}
+
+function extractFullVersionFromPackageManager(pm: unknown): string | null {
+  if (typeof pm !== 'string') return null;
+  const match = /^pnpm@v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/i.exec(pm.trim());
+  return match?.[1] ?? null;
+}
+
+function extractFullVersionFromDevEngines(devEngines: unknown): string | null {
+  if (devEngines === null || typeof devEngines !== 'object') return null;
+  return extractFullVersionFromDevEnginesEntry(
+    (devEngines as { packageManager?: unknown }).packageManager,
+  );
+}
+
+function extractFullVersionFromDevEnginesEntry(entry: unknown): string | null {
+  if (typeof entry === 'string') return extractFullVersionFromPackageManager(entry);
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const version = extractFullVersionFromDevEnginesEntry(item);
+      if (version) return version;
+    }
+    return null;
+  }
+  if (entry !== null && typeof entry === 'object') {
+    const obj = entry as { name?: unknown; version?: unknown };
+    if (typeof obj.name !== 'string' || obj.name.trim().toLowerCase() !== 'pnpm') return null;
+    if (typeof obj.version !== 'string') return null;
+    return (
+      /^(?:v)?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/.exec(obj.version.trim())?.[1] ?? null
+    );
+  }
+  return null;
+}
+
 function extractMajorFromPackageManager(pm: unknown): number | null {
   if (typeof pm !== 'string') return null;
   const trimmed = pm.trim();
@@ -386,11 +455,11 @@ export function findEnclosingPnpmWorkspaceYaml(startDir: string): string | null 
 }
 
 /**
- * Parse `auditConfig.ignoreGhsas` and `auditConfig.ignoreCves` from the
- * text of a `pnpm-workspace.yaml` file and return them as a unified `Set`.
- * Returns an empty `Set` on any parse failure or if neither key is present.
+ * Parse the target pnpm version's effective audit ignore list from
+ * `pnpm-workspace.yaml`. Canonical `audit.ignore` wins when supported;
+ * otherwise the recognized legacy `auditConfig` lists are read.
  */
-export function readAuditIgnoreList(yamlContent: string): Set<string> {
+export function readAuditIgnoreList(yamlContent: string, pnpmVersion?: string | null): Set<string> {
   if (!yamlContent.trim()) return new Set();
   let parsed: unknown;
   try {
@@ -399,26 +468,37 @@ export function readAuditIgnoreList(yamlContent: string): Set<string> {
     return new Set();
   }
   if (parsed === null || typeof parsed !== 'object') return new Set();
-  const auditConfig = (parsed as Record<string, unknown>)['auditConfig'];
-  if (auditConfig === null || typeof auditConfig !== 'object') return new Set();
-  const cfg = auditConfig as Record<string, unknown>;
+  const root = parsed as Record<string, unknown>;
   const ids = new Set<string>();
-  for (const key of ['ignoreGhsas', 'ignoreCves'] as const) {
-    const list = cfg[key];
-    if (Array.isArray(list)) {
-      for (const id of list) {
-        if (typeof id === 'string' && id.trim()) ids.add(id.trim());
-      }
+  const audit = root['audit'];
+  if (supportsCanonicalAuditConfig(pnpmVersion) && audit !== null && typeof audit === 'object') {
+    const canonical = audit as Record<string, unknown>;
+    if ('ignore' in canonical) {
+      addStringIds(ids, canonical['ignore']);
+      return ids;
     }
   }
+
+  const auditConfig = root['auditConfig'];
+  if (auditConfig === null || typeof auditConfig !== 'object') return ids;
+  const cfg = auditConfig as Record<string, unknown>;
+  const legacyKeys = pnpmMajor(pnpmVersion) >= 12 ? ['ignoreGhsas'] : ['ignoreGhsas', 'ignoreCves'];
+  for (const key of legacyKeys) addStringIds(ids, cfg[key]);
   return ids;
 }
 
+function addStringIds(ids: Set<string>, list: unknown): void {
+  if (!Array.isArray(list)) return;
+  for (const id of list) {
+    if (typeof id === 'string' && id.trim()) ids.add(id.trim());
+  }
+}
+
 /**
- * Parse the top-level `auditLevel` key from a `pnpm-workspace.yaml` file.
- * Returns the string value when present, `null` otherwise.
+ * Parse the target pnpm version's audit threshold from `pnpm-workspace.yaml`.
+ * Returns `audit.level` when supported, otherwise the legacy `auditLevel`.
  */
-export function readAuditLevel(yamlContent: string): string | null {
+export function readAuditLevel(yamlContent: string, pnpmVersion?: string | null): string | null {
   if (!yamlContent.trim()) return null;
   let parsed: unknown;
   try {
@@ -427,8 +507,41 @@ export function readAuditLevel(yamlContent: string): string | null {
     return null;
   }
   if (parsed === null || typeof parsed !== 'object') return null;
-  const level = (parsed as Record<string, unknown>)['auditLevel'];
+  const root = parsed as Record<string, unknown>;
+  const audit = root['audit'];
+  if (supportsCanonicalAuditConfig(pnpmVersion) && audit !== null && typeof audit === 'object') {
+    const canonicalLevel = (audit as Record<string, unknown>)['level'];
+    if (typeof canonicalLevel === 'string') return canonicalLevel;
+  }
+  const level = root['auditLevel'];
   return typeof level === 'string' ? level : null;
+}
+
+function supportsCanonicalAuditConfig(version: string | null | undefined): boolean {
+  if (!version) return true;
+  const parsed = /^(?:v)?(\d+)\.(\d+)/.exec(version.trim());
+  if (!parsed) return false;
+  const major = Number.parseInt(parsed[1]!, 10);
+  const minor = Number.parseInt(parsed[2]!, 10);
+  return major >= 12 || (major === 11 && minor >= 16);
+}
+
+function pnpmMajor(version: string | null | undefined): number {
+  if (!version) return 0;
+  const match = /^(?:v)?(\d+)\./.exec(version.trim());
+  return match ? Number.parseInt(match[1]!, 10) : 0;
+}
+
+/** Parse whether pnpm's install-time auto-dedupe is enabled in workspace YAML. */
+export function readAutoDedupe(yamlContent: string): boolean {
+  if (!yamlContent.trim()) return false;
+  try {
+    const parsed: unknown = parseYaml(yamlContent);
+    if (parsed === null || typeof parsed !== 'object') return false;
+    return (parsed as Record<string, unknown>)['autoDedupe'] === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Extract the `packages:` list from pnpm-workspace.yaml text. */

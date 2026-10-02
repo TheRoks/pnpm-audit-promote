@@ -3,8 +3,10 @@ import { consoleLogger, type Logger } from './logger';
 import {
   WorkspaceState,
   detectWorkspacePnpmMajor,
+  detectWorkspacePnpmVersion,
   readAuditIgnoreList,
   readAuditLevel,
+  readAutoDedupe,
 } from './workspace';
 import { createPnpmRunner, ensurePnpmAvailable, getPnpmMajor, type PnpmRunner } from './pnpm';
 import {
@@ -53,7 +55,7 @@ import pkg from '../package.json' with { type: 'json' };
  *   1. The tool intentionally mutates `pnpm-workspace.yaml` (catalog and
  *      overrides) between installs, so the lockfile *must* be allowed to
  *      drift to absorb those changes.
- *   2. pnpm 10/11 enable `--frozen-lockfile` by default whenever the `CI`
+ *   2. pnpm 10/11/12 enable `--frozen-lockfile` by default whenever the `CI`
  *      environment variable is set. Without this flag, the install that
  *      follows a catalog bump fails with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`
  *      on every CI runner.
@@ -84,6 +86,8 @@ export interface RefreshOptions {
   dryRun?: boolean;
   /** Skip the audit + catalog promotion phase. */
   skipAudit?: boolean;
+  /** Select pnpm's audit fix strategy; override mode is the default. */
+  auditFixMode?: AuditFixMode;
   /** Skip `pnpm dedupe` calls. */
   skipDedupe?: boolean;
   /**
@@ -117,6 +121,8 @@ export interface RefreshOptions {
    */
   ignoreWorkspace?: boolean;
 }
+
+export type AuditFixMode = 'override' | 'update';
 
 /**
  * Outcome of a {@link refreshDeps} invocation. Programmatic callers can
@@ -198,6 +204,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
       dryRun,
       preCleanupAuditRaw: initial.preCleanupAuditRaw,
       ignoreWorkspace: options.ignoreWorkspace ?? false,
+      auditFixMode: options.auditFixMode ?? 'override',
     });
   } else {
     logger.detail('Skipped audit and catalog promotion (--no-audit).');
@@ -298,9 +305,11 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
   // is declared. Failures degrade gracefully — `pnpmMajor` stays `null`,
   // which downstream code treats as legacy pnpm 10 behavior.
   let major: number | null = null;
+  let version: string | null = null;
   let source = 'unknown';
   try {
     major = detectWorkspacePnpmMajor(state.rootPackageJson);
+    version = detectWorkspacePnpmVersion(state.rootPackageJson);
     if (major !== null) source = 'workspace package.json';
   } catch {
     // ignore — fall through to PATH lookup
@@ -309,13 +318,25 @@ async function prepareRun(options: RefreshOptions): Promise<PreparedRun> {
     try {
       const versionText = await pnpm.version();
       major = getPnpmMajor(versionText);
+      version = versionText || null;
       source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
     } catch {
       // leave major as null
     }
   }
   state.recordPnpmMajor(major);
+  state.recordPnpmVersion(version);
   logger.detail(`Target workspace pnpm major: ${major ?? 'unknown'} (from ${source}).`);
+
+  const auditFixMode = options.auditFixMode ?? 'override';
+  if (auditFixMode !== 'override' && auditFixMode !== 'update') {
+    throw new Error(
+      `Invalid audit fix mode '${String(auditFixMode)}'; expected 'override' or 'update'.`,
+    );
+  }
+  if (!skipAudit && auditFixMode === 'update' && (major === null || major < 11)) {
+    throw new Error('The audit fix mode "update" requires a detectable pnpm 11 or newer target.');
+  }
 
   return { logger, progressLogger, state, pnpm, dryRun, skipAudit, startedAt };
 }
@@ -361,6 +382,7 @@ async function captureInitialState(
   if (!opts.skipAudit && !opts.dryRun) {
     try {
       const { stdout } = await pnpm.capture(['audit', '--json']);
+      reconcileAfterAuditRead(state, logger);
       initialAdvisories = extractAdvisories(stdout);
       // Only retain the pre-cleanup snapshot when it is a valid audit response
       // (contains an `advisories` key).  pnpm returns {"error":{...}} when there
@@ -412,8 +434,12 @@ async function runInstallAndDedupe(
   await runAndRestore(pnpm, state, logger, [...INSTALL_ARGS]);
 
   progressLogger.step('Deduplicate dependency graph');
-  if (!opts.skipDedupe) {
+  const autoDedupeEnabled =
+    (state.pnpmMajor ?? 0) >= 12 && readAutoDedupe(state.desiredWorkspaceYaml);
+  if (!opts.skipDedupe && !autoDedupeEnabled) {
     await runAndRestore(pnpm, state, logger, ['dedupe']);
+  } else if (autoDedupeEnabled && !opts.skipDedupe) {
+    logger.detail('Skipped explicit dedupe; pnpm autoDedupe is enabled during install.');
   } else {
     logger.detail('Skipped dedupe (--no-dedupe).');
   }
@@ -431,15 +457,18 @@ async function runAuditPhase(
     dryRun: boolean;
     preCleanupAuditRaw: string;
     ignoreWorkspace: boolean;
+    auditFixMode: AuditFixMode;
   },
 ): Promise<PackageJsonDepChange[]> {
   // Capture a post-cleanup audit JSON and share it with the pre-audit
   // catalog bump (which needs the unmasked vulnerability set to decide
   // which direct deps to bump). This is *separate* from the initial
   // audit captured before cleanup for the summary.
-  const postCleanupAuditStdout = opts.dryRun
-    ? ''
-    : (await pnpm.capture(['audit', '--json'])).stdout;
+  let postCleanupAuditStdout = '';
+  if (!opts.dryRun) {
+    postCleanupAuditStdout = (await pnpm.capture(['audit', '--json'])).stdout;
+    reconcileAfterAuditRead(state, logger);
+  }
 
   const pkgJsonDepChanges = await preAuditCatalogBump(
     state,
@@ -449,7 +478,10 @@ async function runAuditPhase(
     postCleanupAuditStdout,
     opts.preCleanupAuditRaw,
   );
-  await auditFix(state, pnpm, progressLogger, { releaseAgeCheck: opts.releaseAgeCheck });
+  await auditFix(state, pnpm, progressLogger, {
+    releaseAgeCheck: opts.releaseAgeCheck,
+    mode: opts.auditFixMode,
+  });
 
   // Under `--ignore-workspace`, pnpm deliberately ignores pnpm-workspace.yaml,
   // including any overrides `pnpm audit --fix` just wrote into it. Migrate
@@ -508,9 +540,24 @@ async function runAndRestore(
   args: string[],
 ): Promise<void> {
   await pnpm.run(args);
+  if (state.refreshHasWorkspaceYaml()) {
+    logger.detail(`Detected pnpm-workspace.yaml created by pnpm ${args[0]}.`);
+  }
   if (state.restoreWorkspaceYaml(logger)) {
     await pnpm.run([...INSTALL_ARGS]);
+    if (state.refreshHasWorkspaceYaml()) {
+      logger.detail('Detected pnpm-workspace.yaml created by pnpm install.');
+    }
+    state.restoreWorkspaceYaml(logger);
   }
+}
+
+function reconcileAfterAuditRead(state: WorkspaceState, logger: Logger): void {
+  if (state.refreshHasWorkspaceYaml()) {
+    logger.detail('Detected pnpm-workspace.yaml created by pnpm audit.');
+  }
+  state.preserveAuditIgnorePrune(logger);
+  state.restoreWorkspaceYaml(logger);
 }
 
 async function preAuditCatalogBump(
@@ -523,8 +570,10 @@ async function preAuditCatalogBump(
 ): Promise<PackageJsonDepChange[]> {
   logger.step('Scan direct dependencies for vulnerable catalog entries');
 
-  const ignoredAdvisoryIds = readAuditIgnoreList(state.desiredWorkspaceYaml);
-  const minSeverity = readAuditLevel(state.desiredWorkspaceYaml) ?? undefined;
+  const auditConfigVersion =
+    state.pnpmVersion ?? (state.pnpmMajor === null ? null : `${state.pnpmMajor}.0.0`);
+  const ignoredAdvisoryIds = readAuditIgnoreList(state.desiredWorkspaceYaml, auditConfigVersion);
+  const minSeverity = readAuditLevel(state.desiredWorkspaceYaml, auditConfigVersion) ?? undefined;
 
   const { bumps, tiers } = await getDirectDepCatalogBumps(state, pnpm, logger, {
     allowMajor,
@@ -587,30 +636,31 @@ async function auditFix(
   state: WorkspaceState,
   pnpm: PnpmRunner,
   logger: Logger,
-  options: { releaseAgeCheck: boolean },
+  options: { releaseAgeCheck: boolean; mode: AuditFixMode },
 ): Promise<void> {
   logger.step('Apply pnpm audit fixes');
-  // pnpm 11 made `--fix` require an explicit value (`override` or `update`)
+  // pnpm 11/12 require `--fix` to include an explicit value (`override` or `update`)
   // and rejects the bare flag with ERR_PNPM_INVALID_FIX_OPTION. We always
   // want override-based fixes because the whole point of this tool is to
-  // promote those overrides into the catalog (`--fix=update` would patch
-  // the lockfile directly and bypass that pipeline). pnpm 10 still accepts
+  // promote those overrides into the catalog (`--fix=update` patches the
+  // lockfile directly and bypasses that pipeline). pnpm 10 still accepts
   // the bare `--fix`, so it stays the default for older / unknown majors.
   const auditArgs =
-    (state.pnpmMajor ?? 0) >= 11 ? ['audit', '--fix', 'override'] : ['audit', '--fix'];
+    (state.pnpmMajor ?? 0) >= 11 ? ['audit', '--fix', options.mode] : ['audit', '--fix'];
   // pnpm audit returns non-zero when vulnerabilities remain; don't fail.
   const code = await pnpm.runAllowFail(auditArgs);
   logger.detail(`pnpm ${auditArgs.join(' ')} completed with exit code ${code}.`);
 
-  // pnpm 11's `audit --fix override` writes its overrides into
+  // pnpm 11/12's `audit --fix override` writes its overrides into
   // pnpm-workspace.yaml even when the workspace started without one
   // (notably under `--ignore-workspace`). Re-detect the file before the
   // sync/collapse passes so the new content is not silently ignored.
   if (state.refreshHasWorkspaceYaml()) {
     logger.detail('Detected pnpm-workspace.yaml created by `pnpm audit --fix`.');
   }
+  state.preserveAuditIgnorePrune(logger);
 
-  // pnpm 11's `audit --fix` appends the patched version of every fixed
+  // pnpm 11/12's `audit --fix` appends the patched version of every fixed
   // advisory to the top-level `minimumReleaseAgeExclude` block. The tool must
   // never expand that list (REQ-PNPM11-011): reset it to the user's original
   // on disk *before* the override-promotion pass below reads (and would
@@ -622,7 +672,7 @@ async function auditFix(
   // pinned to a too-fresh patched version would make the reinstall below fail
   // under pnpm's strict release-age resolution. Drop any such override (rather
   // than re-expand the exclude list) so the install keeps working.
-  if (options.releaseAgeCheck) {
+  if (options.mode === 'override' && options.releaseAgeCheck) {
     await guardWorkspaceOverrideReleaseAge(state, pnpm, logger);
   }
 

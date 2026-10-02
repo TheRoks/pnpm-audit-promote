@@ -1,0 +1,6 @@
+{
+  "name": "v12-direct-vuln-root",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@12.8.1"
+}

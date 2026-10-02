@@ -1,0 +1,17 @@
+# Integration fixture: pnpm 12 workspace with a vulnerable direct catalog dep.
+minimumReleaseAge: 720
+minimumReleaseAgeExclude:
+  - '@scope/*'
+
+autoDedupe: true
+
+audit:
+  level: high
+  ignorePrune: true
+  ignore: []
+
+packages:
+  - 'apps/*'
+
+catalog:
+  lodash: '4.17.20'

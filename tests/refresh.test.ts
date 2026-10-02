@@ -838,6 +838,275 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(auditFixCalls[0]!.args).toEqual(['audit', '--fix', 'override']);
   });
 
+  it("REQ-PNPM12-001: uses 'audit --fix override' by default for pnpm 12", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@12.8.1' }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner({}, { version: '10.33.0' });
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const auditFix = calls.find((call) => call.args[0] === 'audit' && call.args.includes('--fix'));
+    expect(auditFix?.args).toEqual(['audit', '--fix', 'override']);
+  });
+
+  it("REQ-PNPM12-005: supports opt-in 'audit --fix update' mode on pnpm 12", async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@12.8.1' }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner();
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      auditFixMode: 'update',
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(
+      calls.find((call) => call.args[0] === 'audit' && call.args.includes('--fix'))?.args,
+    ).toEqual(['audit', '--fix', 'update']);
+  });
+
+  it('REQ-PNPM12-006: rejects update mode on pnpm 10 before running commands or removing files', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@10.33.0' }),
+      'utf8',
+    );
+    const lockPath = path.join(tmp, 'pnpm-lock.yaml');
+    fs.writeFileSync(lockPath, 'lockfileVersion: 9.0\n', 'utf8');
+    const { runner, calls } = makeRecordingRunner();
+
+    await expect(
+      refreshDeps({
+        path: tmp,
+        force: true,
+        logger: silentLogger,
+        pnpm: runner,
+        auditFixMode: 'update',
+        summary: false,
+      }),
+    ).rejects.toThrow(/requires a detectable pnpm 11 or newer/);
+
+    expect(calls).toHaveLength(0);
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  it('REQ-PNPM12-004: skips explicit dedupe when pnpm 12 autoDedupe is enabled', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "autoDedupe: true\ncatalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@12.8.1' }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner();
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipAudit: true,
+      summary: false,
+    });
+
+    expect(calls.some((call) => call.args[0] === 'dedupe')).toBe(false);
+  });
+
+  it('REQ-PNPM12-007: preserves pnpm 12 audit.ignore pruning when audit.ignorePrune is enabled', async () => {
+    const workspaceYaml = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(
+      workspaceYaml,
+      [
+        'audit:',
+        '  ignorePrune: true',
+        '  ignore:',
+        '    - GHSA-stale-0000-0000',
+        'catalog:',
+        "  react: '18.2.0'",
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@12.8.1' }),
+      'utf8',
+    );
+    const { runner, calls } = makeRecordingRunner();
+    const pruningRunner = {
+      ...runner,
+      async runAllowFail(args: string[]) {
+        const code = await runner.runAllowFail(args);
+        if (args[0] === 'audit' && args.includes('--fix')) {
+          fs.writeFileSync(
+            workspaceYaml,
+            [
+              'audit:',
+              '  ignorePrune: true',
+              '  ignore: []',
+              'catalog:',
+              "  react: '18.2.0'",
+              '',
+            ].join('\n'),
+            'utf8',
+          );
+        }
+        return code;
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: pruningRunner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const finalYaml = fs.readFileSync(workspaceYaml, 'utf8');
+    expect(finalYaml).toContain('ignorePrune: true');
+    expect(finalYaml).not.toContain('GHSA-stale-0000-0000');
+    expect(calls.some((call) => call.args[0] === 'audit' && call.args.includes('--fix'))).toBe(
+      true,
+    );
+  });
+
+  it('REQ-PNPM12-007: keeps audit.ignore pruning from the pre-cleanup audit across install', async () => {
+    const workspaceYaml = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(
+      workspaceYaml,
+      [
+        'audit:',
+        '  ignorePrune: true',
+        '  ignore:',
+        '    - GHSA-stale-0000-0000',
+        'catalog:',
+        "  react: '18.2.0'",
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@12.8.1' }),
+      'utf8',
+    );
+    const { runner } = makeRecordingRunner();
+    let pruned = false;
+    const auditingRunner = {
+      ...runner,
+      async capture(args: string[]) {
+        const result = await runner.capture(args);
+        if (args[0] === 'audit' && !args.includes('--fix') && !pruned) {
+          pruned = true;
+          fs.writeFileSync(
+            workspaceYaml,
+            [
+              'audit:',
+              '  ignorePrune: true',
+              '  ignore: []',
+              'catalog:',
+              "  react: '18.2.0'",
+              '',
+            ].join('\n'),
+            'utf8',
+          );
+        }
+        return result;
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: auditingRunner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const finalYaml = fs.readFileSync(workspaceYaml, 'utf8');
+    expect(pruned).toBe(true);
+    expect(finalYaml).toContain('ignore: []');
+    expect(finalYaml).not.toContain('GHSA-stale-0000-0000');
+  });
+
+  it('REQ-CORE-010, REQ-WORKSPACE-010, REQ-PNPM12-003: keeps a workspace yaml created during the first pnpm 12 install', async () => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({
+        name: 'root',
+        packageManager: 'pnpm@12.8.1',
+        workspaces: ['apps/*'],
+      }),
+      'utf8',
+    );
+    const { runner } = makeRecordingRunner();
+    let wroteWorkspaceYaml = false;
+    const generatingRunner = {
+      ...runner,
+      async run(args: string[]) {
+        await runner.run(args);
+        if (args[0] === 'install' && !wroteWorkspaceYaml) {
+          wroteWorkspaceYaml = true;
+          fs.writeFileSync(
+            path.join(tmp, 'pnpm-workspace.yaml'),
+            "packages:\n  - 'apps/*'\n",
+            'utf8',
+          );
+        }
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: generatingRunner,
+      skipAudit: true,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain("- 'apps/*'");
+  });
+
   it("REQ-PNPM11-001, REQ-PNPM11-005, REQ-WORKSPACE-004: uses 'audit --fix override' when the target workspace declares devEngines.packageManager pnpm 11", async () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),

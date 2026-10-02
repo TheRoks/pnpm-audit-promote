@@ -1,5 +1,5 @@
 /**
- * pnpm 11's `pnpm audit --fix` appends the patched version of every fixed
+ * pnpm 11/12's `pnpm audit --fix` appends the patched version of every fixed
  * advisory to the top-level `minimumReleaseAgeExclude` block in
  * `pnpm-workspace.yaml`. This tool must never expand that list
  * (REQ-PNPM11-011), so after pnpm rewrites the file we reset the block to the

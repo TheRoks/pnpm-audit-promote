@@ -9,11 +9,13 @@ import {
   isMap,
   isScalar,
   isAlias,
+  parse as parseYaml,
   Scalar,
   type Document,
   type YAMLMap,
   type ParsedNode,
 } from 'yaml';
+import semver from 'semver';
 
 const CATALOG_KEY = 'catalog';
 const CATALOGS_KEY = 'catalogs';
@@ -33,7 +35,7 @@ function tryParse(yaml: string): Doc | null {
 
 /**
  * Return every catalog mapping in the document: the top-level `catalog:` map,
- * plus every named map inside `catalogs:` (pnpm 10 supports multiple named
+ * plus every named map inside `catalogs:` (pnpm 10+ supports multiple named
  * catalogs).
  */
 function getCatalogMaps(doc: Doc): YAMLMap[] {
@@ -106,7 +108,17 @@ function extractConcreteVersions(raw: Map<string, string | null>): Map<string, s
   for (const [name, value] of raw) {
     if (!value) continue;
     if (value.startsWith('$')) continue;
-    const concrete = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(value)?.[1];
+    // Protocol specs such as `file:../lib-1.2.3`, `link:../pkg-2.0.0`,
+    // `workspace:^`, and npm aliases are not catalog versions. A substring
+    // match would misclassify a local path containing digits as semver.
+    let range: string | null = null;
+    try {
+      range = semver.validRange(value);
+    } catch {
+      // Invalid semver ranges include pnpm protocols such as `file:`/`link:`.
+    }
+    if (!range) continue;
+    const concrete = semver.minVersion(range)?.version;
     if (concrete) versions.set(name, concrete);
   }
   return versions;
@@ -192,6 +204,67 @@ export function serializeDoc(doc: Doc, original: string): string {
     return out.replace(/\n/g, '\r\n');
   }
   return out;
+}
+
+/**
+ * Keep pnpm 12's intentional `audit.ignorePrune` result while discarding any
+ * unrelated workspace-yaml changes made by an audit read. Only accepts a
+ * reduced `audit.ignore` list whose entries all existed in the desired file.
+ */
+export function preservePrunedAuditIgnore(desired: string, current: string): string {
+  const desiredRoot = parseWorkspaceYaml(desired);
+  const desiredAudit = desiredRoot?.['audit'];
+  if (
+    desiredAudit === null ||
+    typeof desiredAudit !== 'object' ||
+    (desiredAudit as Record<string, unknown>)['ignorePrune'] !== true
+  ) {
+    return desired;
+  }
+  const desiredConfig = desiredAudit as Record<string, unknown>;
+  const desiredIgnore = desiredConfig['ignore'];
+  if (!Array.isArray(desiredIgnore) || !desiredIgnore.every((id) => typeof id === 'string')) {
+    return desired;
+  }
+
+  const currentAudit = parseWorkspaceYaml(current)?.['audit'];
+  if (
+    currentAudit === null ||
+    typeof currentAudit !== 'object' ||
+    (currentAudit as Record<string, unknown>)['ignorePrune'] !== true
+  ) {
+    return desired;
+  }
+  const currentConfig = currentAudit as Record<string, unknown>;
+  const hasCurrentIgnore = 'ignore' in currentConfig;
+  const currentIgnore = hasCurrentIgnore ? currentConfig['ignore'] : [];
+  if (!Array.isArray(currentIgnore) || !currentIgnore.every((id) => typeof id === 'string')) {
+    return desired;
+  }
+  if (
+    currentIgnore.length > desiredIgnore.length ||
+    !currentIgnore.every((id) => desiredIgnore.includes(id))
+  ) {
+    return desired;
+  }
+  if (JSON.stringify(currentIgnore) === JSON.stringify(desiredIgnore)) return desired;
+
+  const doc = parseWorkspaceDoc(desired);
+  if (!doc) return desired;
+  if (hasCurrentIgnore) doc.setIn(['audit', 'ignore'], currentIgnore);
+  else doc.deleteIn(['audit', 'ignore']);
+  return serializeDoc(doc, desired);
+}
+
+function parseWorkspaceYaml(yaml: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = parseYaml(yaml);
+    return parsed !== null && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Re-export `parseDocument` wrapper for callers that need a parsed doc. */

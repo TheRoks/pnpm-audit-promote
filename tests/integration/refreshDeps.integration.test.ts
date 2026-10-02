@@ -28,9 +28,9 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
   const localMajor = detectPnpmMajor();
   const wantMajor = expectedPnpmMajor();
   const hasMajorMismatch = wantMajor != null && localMajor != null && wantMajor !== localMajor;
-  if (wantMajor != null && localMajor != null && wantMajor !== localMajor) {
-    console.warn(
-      `[integration] Skipping: INTEGRATION_PNPM_MAJOR=${wantMajor} but pnpm --version reports ${localMajor}.`,
+  if (wantMajor != null && localMajor !== wantMajor) {
+    throw new Error(
+      `[integration] Expected pnpm ${wantMajor}, but pnpm --version reports ${localMajor ?? 'unavailable'}.`,
     );
   }
 
@@ -153,6 +153,55 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       );
       expect(lodashEntry).toBeDefined();
       expect(compareSemver(String(lodashEntry![1]), '4.17.21')).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe.skipIf(hasMajorMismatch || localMajor !== 12)('pnpm 12', () => {
+    it('REQ-INT-PNPM12-001, REQ-PNPM12-010: promotes a catalog fix and preserves release-age settings', async () => {
+      ws = setupRealWorkspace('v12-direct-vuln');
+
+      const result = await refreshDeps({
+        path: ws.root,
+        force: true,
+        logger: silentLogger,
+        summary: false,
+      });
+
+      expect(result.canceled).toBe(false);
+      const yamlText = ws.readWorkspaceYaml();
+      const parsed = YAML.parse(yamlText) as {
+        autoDedupe?: boolean;
+        audit?: { ignore?: string[]; ignorePrune?: boolean; level?: string };
+        catalog?: Record<string, string>;
+        minimumReleaseAge?: number;
+        minimumReleaseAgeExclude?: string[];
+        overrides?: Record<string, string>;
+      };
+      expect(parsed.catalog?.['lodash']).toBeDefined();
+      expect(compareSemver(parsed.catalog!['lodash']!, '4.17.21')).toBeGreaterThanOrEqual(0);
+      expect(parsed.minimumReleaseAge).toBe(720);
+      expect(parsed.minimumReleaseAgeExclude).toEqual(['@scope/*']);
+      expect(parsed.autoDedupe).toBe(true);
+      expect(parsed.audit?.level).toBe('high');
+      expect(parsed.audit?.ignorePrune).toBe(true);
+      expect(parsed.audit?.ignore ?? []).toEqual([]);
+      expect(parsed.overrides?.['lodash'] ?? null).toBeNull();
+    });
+
+    it('REQ-INT-PNPM12-002, REQ-WORKSPACE-010: adopts workspace yaml generated from package.json workspaces', async () => {
+      ws = setupRealWorkspace('v12-workspaces-autocreate');
+
+      const result = await refreshDeps({
+        path: ws.root,
+        force: true,
+        logger: silentLogger,
+        summary: false,
+        skipDedupe: true,
+      });
+
+      expect(result.canceled).toBe(false);
+      const generated = YAML.parse(ws.readWorkspaceYaml()) as { packages?: string[] };
+      expect(generated.packages).toContain('apps/*');
     });
   });
 });

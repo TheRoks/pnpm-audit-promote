@@ -34,7 +34,8 @@ pnpm dlx pnpm-audit-promote
 npx pnpm-audit-promote
 ```
 
-Requires Node.js >= 22 and `pnpm` (10 or 11) available on `PATH`.
+Requires Node.js >= 22 and `pnpm` (10, 11, or 12) available on `PATH`.
+Running pnpm 12 itself requires Node.js >= 22.13.0.
 
 ### pnpm 11 notes
 
@@ -43,6 +44,14 @@ Requires Node.js >= 22 and `pnpm` (10 or 11) available on `PATH`.
 - It never adds or modifies the `minimumReleaseAgeExclude` block in `pnpm-workspace.yaml`. Your release-age configuration — both the global `minimumReleaseAge` gate and any existing `minimumReleaseAgeExclude` entries — is preserved verbatim across the run. As a result, a freshly-published advisory-fix version (published less than `minimumReleaseAge` ago) may be blocked by pnpm 11's release-age gate; add it to `minimumReleaseAgeExclude` yourself if you want to allow it. When such a fix cannot satisfy your gate, the tool drops that override before the reinstall (instead of expanding your exclude list) so the install keeps working — re-run once the patch matures. Disable this with `--no-release-age-check`.
 
 `pnpm.overrides` defined in `package.json` are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
+
+### pnpm 12 notes
+
+pnpm 12 is supported while pnpm 10 and 11 remain supported. The default audit strategy stays `pnpm audit --fix override`, so eligible fixes can be promoted into catalogs. pnpm 12's `audit.ignore` and `audit.level` settings are read when selecting direct-dependency bumps; legacy settings are honored according to the target pnpm version. If pnpm 12.7 or newer creates `pnpm-workspace.yaml` from the root `package.json` `workspaces` field during install, the tool adopts that generated file for the rest of the run. With pnpm 12 and `autoDedupe: true`, the explicit `pnpm dedupe` step is skipped because install performs deduplication.
+
+For pnpm 12, `audit.ignore` takes precedence over `auditConfig.ignoreGhsas`; pnpm 12 no longer recognizes the legacy `auditConfig.ignoreCves` setting. The example workspace at [`examples/pnpm12`](./examples/pnpm12/) shows the canonical audit settings and `autoDedupe` option.
+
+The optional `--audit-fix-mode update` selects pnpm's lockfile-update strategy. It requires pnpm 11 or newer and bypasses audit override generation, so the default `override` mode remains the recommended choice when catalog promotion is desired. The programmatic API accepts the same option as `auditFixMode: 'update'`.
 
 The target directory qualifies as a workspace root when **any** of the following are present:
 
@@ -62,22 +71,23 @@ If an **enclosing** `pnpm-workspace.yaml` is found in any parent directory, the 
 pnpm-audit-promote [options]
 ```
 
-| Flag                        | Description                                                                                                                                                                                                | Default |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `-p, --path <dir>`          | Workspace root (`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `package.json` declaring pnpm)                                                                                                                 | `cwd`   |
-| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt                                                                                                                                                            | `false` |
-| `-n, --dry-run`             | Plan and log changes without writing files or pnpm                                                                                                                                                         | `false` |
-| `--no-audit`                | Skip the audit + catalog promotion phase                                                                                                                                                                   |         |
-| `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                                                                                                                                   |         |
-| `--allow-major`             | Allow catalog bumps that cross a major version boundary (still logged as warnings). Use `--no-allow-major` to refuse them and keep the bump as an override.                                                | `true`  |
-| `--no-release-age-check`    | Skip the post-audit check that drops overrides pinning a version too fresh for the workspace's `minimumReleaseAge` gate. Use for fully offline runs where registry publish times cannot be fetched.        |         |
-| `--no-summary`              | Suppress the terminal-pretty run summary printed at the end                                                                                                                                                |         |
-| `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path. Path must be within the workspace root; outside paths are silently skipped.                                                   |         |
-| `--ignore-workspace`        | Treat `--path` as the workspace root even when an enclosing `pnpm-workspace.yaml` is found in a parent directory. Forwards `--ignore-workspace` to every pnpm invocation so installs/overrides stay local. | `false` |
-| `-v, --verbose`             | Verbose output (raw pnpm output + tracing)                                                                                                                                                                 | `false` |
-| `-q, --quiet`               | Quiet output (warnings + errors only)                                                                                                                                                                      | `false` |
-| `-V, --version`             | Print version                                                                                                                                                                                              |         |
-| `-h, --help`                | Print help                                                                                                                                                                                                 |         |
+| Flag                        | Description                                                                                                                                                                                                | Default    |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `-p, --path <dir>`          | Workspace root (`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `package.json` declaring pnpm)                                                                                                                 | `cwd`      |
+| `-f, --force` / `-y, --yes` | Skip the destructive-action confirmation prompt                                                                                                                                                            | `false`    |
+| `-n, --dry-run`             | Plan and log changes without writing files or pnpm                                                                                                                                                         | `false`    |
+| `--no-audit`                | Skip the audit + catalog promotion phase                                                                                                                                                                   |            |
+| `--audit-fix-mode <mode>`   | pnpm audit strategy: `override` (default, supports catalog promotion) or `update` (pnpm 11+, updates the lockfile directly)                                                                                | `override` |
+| `--no-dedupe`               | Skip `pnpm dedupe` calls                                                                                                                                                                                   |            |
+| `--allow-major`             | Allow catalog bumps that cross a major version boundary (still logged as warnings). Use `--no-allow-major` to refuse them and keep the bump as an override.                                                | `true`     |
+| `--no-release-age-check`    | Skip the post-audit check that drops overrides pinning a version too fresh for the workspace's `minimumReleaseAge` gate. Use for fully offline runs where registry publish times cannot be fetched.        |            |
+| `--no-summary`              | Suppress the terminal-pretty run summary printed at the end                                                                                                                                                |            |
+| `--summary-file <path>`     | Also write a plain-text (no ANSI) copy of the run summary to the given path. Path must be within the workspace root; outside paths are silently skipped.                                                   |            |
+| `--ignore-workspace`        | Treat `--path` as the workspace root even when an enclosing `pnpm-workspace.yaml` is found in a parent directory. Forwards `--ignore-workspace` to every pnpm invocation so installs/overrides stay local. | `false`    |
+| `-v, --verbose`             | Verbose output (raw pnpm output + tracing)                                                                                                                                                                 | `false`    |
+| `-q, --quiet`               | Quiet output (warnings + errors only)                                                                                                                                                                      | `false`    |
+| `-V, --version`             | Print version                                                                                                                                                                                              |            |
+| `-h, --help`                | Print help                                                                                                                                                                                                 |            |
 
 ### Example
 
@@ -89,7 +99,7 @@ pnpm-audit-promote --dry-run --verbose
 pnpm-audit-promote --path ./examples/angular-v20 --ignore-workspace --force
 ```
 
-A minimal end-to-end fixture lives under [`examples/basic`](./examples/basic/) — see its [README](./examples/basic/README.md) for a `--dry-run` walkthrough.
+A minimal end-to-end fixture lives under [`examples/basic`](./examples/basic/) — see its [README](./examples/basic/README.md) for a `--dry-run` walkthrough. pnpm 12 settings are shown in [`examples/pnpm12`](./examples/pnpm12/).
 
 ### Output modes
 
@@ -111,9 +121,10 @@ A minimal end-to-end fixture lives under [`examples/basic`](./examples/basic/) �
 10. `pnpm install`
 11. `pnpm dedupe` (skip with `--no-dedupe`)
 
-After every pnpm command the tool re-applies the _desired_ `pnpm-workspace.yaml`
-because pnpm 10 normalizes the file on install/up and may silently drop
-settings (e.g. `savePrefix: ''`) or bump catalog versions.
+After pnpm commands the tool re-applies the _desired_ `pnpm-workspace.yaml`
+when pnpm rewrites it, preserving user settings and catalog changes. If pnpm
+12.7+ creates the file from `package.json` `workspaces`, that new file becomes
+the desired workspace configuration.
 
 ### Concrete example
 
@@ -160,6 +171,7 @@ const result = await refreshDeps({
   // Optional — all default-friendly:
   // skipAudit: false,
   // skipDedupe: false,
+  // auditFixMode: 'override', // or 'update' on pnpm 11+
   // allowMajor: true,
   // ignoreWorkspace: false, // forward --ignore-workspace to pnpm
   // summary: true,          // render terminal summary at the end
@@ -186,7 +198,7 @@ if (result.auditStatus === 'complete') {
 
 ### Exported surface
 
-`refreshDeps`, `RefreshOptions`, `RefreshResult`,
+`refreshDeps`, `RefreshOptions`, `RefreshResult`, `AuditFixMode`,
 `createLogger`, `consoleLogger`, `silentLogger`, `Logger`, `LogLevel`, `ConsoleLoggerOptions`,
 `WorkspaceState`,
 `createPnpmRunner`, `ensurePnpmAvailable`, `PnpmRunner`, `PnpmOptions`,
@@ -201,7 +213,7 @@ The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` imp
 
 ## Limitations
 
-- YAML edits are line-oriented (regex-based) to preserve formatting bit-for-bit;
+- YAML catalog edits use the YAML AST and preserve surrounding formatting;
   JSON edits use `jsonc-parser` for minimal, structure-aware changes.
   Unusual constructs (YAML anchors, custom comments inside the catalog block)
   are not deeply parsed.
@@ -215,6 +227,9 @@ The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` imp
 
 - **`pnpm is not installed or not on PATH`** — install pnpm globally
   (`npm i -g pnpm`) or use Corepack.
+- **pnpm 12 rejects a workspace setting** — pnpm 12 rejects unrecognized
+  workspace settings. Remove or migrate settings that the installed pnpm
+  version does not support before running this tool.
 - **Refusing to run destructive operations non-interactively** — re-run with
   `--force` (or `--yes`) when running from CI.
 - **A `node_modules` folder cannot be fully removed (Windows)** — close any

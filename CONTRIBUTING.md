@@ -5,7 +5,8 @@ Thanks for your interest in contributing!
 ## Prerequisites
 
 - Node.js >= 22
-- pnpm 10 (the toolchain in this repo is pinned to pnpm 10 via `packageManager`; pnpm 11 is supported as a target workspace and exercised in CI by the `integration-pnpm11` job, but is not required for local development)
+- pnpm 11.1.2 (the repository's `packageManager` pin); pnpm 10, 11, and 12 are supported target workspaces
+- Node.js >= 22.13.0 when running a pnpm 12 target
 
 ## Setup
 
@@ -68,10 +69,13 @@ Integration tests under `tests/integration/**` shell out to a real `pnpm`
 binary and are skipped by default to keep `pnpm test` fast. Enable them with:
 
 ```sh
-RUN_INTEGRATION=1 pnpm vitest run tests/integration
+pnpm test:integration
 ```
 
-CI exercises both pnpm 10 and pnpm 11 via the `integration` matrix job.
+CI exercises pnpm 10, 11, and 12 via the `integration` matrix. pnpm 12 also
+runs on macOS and Windows to cover its native executables. The launcher invokes
+Vitest through Node directly so the repository's package-manager pin cannot
+silently replace the integration target.
 
 ## Releasing
 

@@ -9,6 +9,7 @@ import {
   resolveWorkspacePackageDirs,
   readAuditIgnoreList,
   readAuditLevel,
+  readAutoDedupe,
 } from '../src/workspace';
 import { WorkspaceReadError } from '../src/errors';
 
@@ -548,6 +549,24 @@ describe('readAuditIgnoreList', () => {
     expect(ids.has('GHSA-valid-0000-0000')).toBe(true);
     expect(ids.size).toBe(1);
   });
+
+  it('REQ-PNPM12-002: reads canonical audit.ignore and gives it precedence over legacy fields', () => {
+    const yaml = [
+      'audit:',
+      '  ignore:',
+      '    - GHSA-canonical-0000-0000',
+      'auditConfig:',
+      '  ignoreGhsas:',
+      '    - GHSA-legacy-0000-0000',
+    ].join('\n');
+    expect([...readAuditIgnoreList(yaml, '12.0.0')]).toEqual(['GHSA-canonical-0000-0000']);
+  });
+
+  it('REQ-PNPM12-002: does not apply the removed ignoreCves setting on pnpm 12', () => {
+    const yaml = 'auditConfig:\n  ignoreCves:\n    - CVE-2026-12345\n';
+    expect(readAuditIgnoreList(yaml, '12.0.0')).toEqual(new Set());
+    expect(readAuditIgnoreList(yaml, '11.15.0').has('CVE-2026-12345')).toBe(true);
+  });
 });
 
 describe('readAuditLevel', () => {
@@ -573,6 +592,27 @@ describe('readAuditLevel', () => {
 
   it('REQ-AUDIT-012: returns null for malformed YAML', () => {
     expect(readAuditLevel(': bad: yaml: [')).toBeNull();
+  });
+
+  it('REQ-PNPM12-002: reads audit.level and gives it precedence over auditLevel', () => {
+    expect(readAuditLevel('auditLevel: high\naudit:\n  level: moderate\n', '12.0.0')).toBe(
+      'moderate',
+    );
+  });
+
+  it('REQ-PNPM12-002: reads nested audit.level only for versions that support it', () => {
+    const yaml = 'auditLevel: high\naudit:\n  level: moderate\n';
+    expect(readAuditLevel(yaml, '11.15.0')).toBe('high');
+    expect(readAuditLevel(yaml, '11.16.0')).toBe('moderate');
+  });
+});
+
+describe('readAutoDedupe', () => {
+  it('REQ-PNPM12-004: returns true only for an explicit autoDedupe true setting', () => {
+    expect(readAutoDedupe('autoDedupe: true\n')).toBe(true);
+    expect(readAutoDedupe('autoDedupe: false\n')).toBe(false);
+    expect(readAutoDedupe('autoDedupe: "true"\n')).toBe(false);
+    expect(readAutoDedupe(': bad: yaml: [')).toBe(false);
   });
 });
 

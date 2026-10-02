@@ -1,0 +1,9 @@
+autoDedupe: true
+
+audit:
+  level: moderate
+  ignorePrune: true
+  ignore: []
+
+catalog:
+  lodash: '4.17.21'

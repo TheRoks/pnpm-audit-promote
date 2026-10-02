@@ -32,8 +32,8 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   any file on disk and SHALL NOT invoke the real `pnpm` binary.
 - **REQ-CORE-003** — `refreshDeps` SHALL re-apply the desired
   `pnpm-workspace.yaml` snapshot after every `pnpm` invocation.
-  _Rationale: pnpm 10 normalizes the file on install/update (e.g. dropping
-  `savePrefix: ''`); re-applying the snapshot preserves the user's
+  _Rationale: pnpm 10/11 may normalize the file on install/update (e.g.
+  dropping `savePrefix: ''`); re-applying the snapshot preserves the user's
   configuration across each invocation._
 - **REQ-CORE-004** — `refreshDeps` SHALL resolve to a `RefreshResult`
   containing `canceled`, `durationMs`, `auditStatus`, `catalogChanges`, `overrideChanges`,
@@ -48,7 +48,7 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-CORE-007** — Every `pnpm install` invocation issued by
   `refreshDeps` SHALL include `--no-frozen-lockfile`.
   _Rationale: the tool mutates `pnpm-workspace.yaml` (catalog and
-  overrides) between installs; pnpm 10/11 enable `--frozen-lockfile`
+  overrides) between installs; pnpm 10/11/12 enable `--frozen-lockfile`
   by default in CI (`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`). The flag
   is a no-op outside CI._
 - **REQ-CORE-008** — `refreshDeps` SHALL run `pnpm audit --json` before
@@ -62,6 +62,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-CORE-009** — When the pre-cleanup `pnpm audit --json` invocation
   throws or exits non-zero, the tool SHALL log a warning and continue
   with an empty initial advisory baseline instead of aborting the run.
+- **REQ-CORE-010** — After a pnpm command creates `pnpm-workspace.yaml`,
+  `refreshDeps` SHALL capture the new file as the desired workspace snapshot
+  before later workspace manipulation.
 
 ## WORKSPACE — root detection and scope
 
@@ -197,13 +200,14 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   SHALL be bumped for any advisory severity.
 - **REQ-AUDIT-010** — Prerelease versions SHALL be excluded from the set of
   candidate bump versions when resolving a patched semver range.
-- **REQ-AUDIT-011** — The tool SHALL read `auditConfig.ignoreGhsas` (pnpm 11)
-  and `auditConfig.ignoreCves` (pnpm 10) from `pnpm-workspace.yaml`. Any
-  advisory whose `github_advisory_id` matches an entry in `ignoreGhsas`, or
-  whose `cves` list intersects with `ignoreCves`, SHALL be excluded from all
-  direct-dep bump decisions (both catalog and `package.json` bumps).
-- **REQ-AUDIT-012** — The tool SHALL read the top-level `auditLevel` key from
-  `pnpm-workspace.yaml` and use its value as the effective minimum severity
+- **REQ-AUDIT-011** — The tool SHALL read the target pnpm version's effective
+  audit ignore configuration from `pnpm-workspace.yaml`. Canonical
+  `audit.ignore` SHALL take precedence when supported; older pnpm versions
+  SHALL retain their recognized `auditConfig` fields. Matching advisories
+  SHALL be excluded from direct-dep catalog and `package.json` bump decisions.
+- **REQ-AUDIT-012** — The tool SHALL read the target pnpm version's effective
+  audit severity setting (`audit.level` when supported, otherwise
+  `auditLevel`) from `pnpm-workspace.yaml` and use its value as the effective minimum severity
   threshold for ranged-dep bump decisions (superseding the hard-coded `high`
   default from REQ-AUDIT-009). Valid values are `info`, `low`, `moderate`,
   `high`, and `critical`. When `auditLevel` is absent the default of `high`
@@ -285,6 +289,38 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   enough (honouring `minimumReleaseAgeIgnoreMissingTime`). The check SHALL be
   skippable via `--no-release-age-check` for offline runs.
 
+## PNPM12 — pnpm 12 specific behavior
+
+- **REQ-PNPM12-001** — The default audit-fix strategy on pnpm 12 SHALL be
+  `pnpm audit --fix override`, preserving the override-promotion flow.
+- **REQ-PNPM12-002** — The tool SHALL honor pnpm 12's canonical
+  `audit.ignore` and `audit.level` settings, give canonical settings
+  precedence over supported legacy settings, and ignore the removed
+  `auditConfig.ignoreCves` setting when targeting pnpm 12.
+- **REQ-PNPM12-003** — A `pnpm-workspace.yaml` created by pnpm 12.7 or newer
+  from the root `package.json` `workspaces` field during install SHALL be
+  adopted as the desired workspace snapshot.
+- **REQ-PNPM12-004** — When pnpm 12's `autoDedupe` workspace setting is true,
+  the tool SHALL rely on install-time deduplication and skip explicit
+  `pnpm dedupe` calls.
+- **REQ-PNPM12-005** — Callers SHALL be able to select pnpm's `update` audit
+  fix mode through `RefreshOptions.auditFixMode` and `--audit-fix-mode update`;
+  override mode SHALL remain the default.
+- **REQ-PNPM12-006** — Update audit-fix mode SHALL be rejected before any
+  workspace mutation when the target pnpm version is unknown or older than
+  pnpm 11.
+- **REQ-PNPM12-007** — When pnpm 12 prunes stale `audit.ignore` entries under
+  `audit.ignorePrune`, the tool SHALL preserve pnpm's resulting ignore list.
+- **REQ-PNPM12-008** — Catalog values using local or workspace protocols
+  SHALL NOT be interpreted as concrete semver versions merely because their
+  paths contain version-like text.
+- **REQ-PNPM12-009** — `PnpmRunner.version()` SHALL query the configured
+  `pnpmPath` when one is provided, so explicit executables are detected
+  consistently across commands.
+- **REQ-PNPM12-010** — pnpm 12 audit fixes SHALL preserve the user's
+  `minimumReleaseAge` and `minimumReleaseAgeExclude` configuration across
+  the run.
+
 ## SUMMARY — run summary output
 
 - **REQ-SUMMARY-001** — By default the tool SHALL print a terminal-pretty
@@ -343,6 +379,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   `WorkspaceNotFoundError`, `EnclosingWorkspaceError`,
   `NonInteractiveConfirmationError`, `PnpmNotInstalledError`, or
   `PnpmCommandFailedError` SHALL exit 1 with the error message on stderr.
+- **REQ-CLI-016** — `--audit-fix-mode` SHALL accept only `override` or
+  `update`, default to `override`, and pass the selected strategy to
+  `refreshDeps`.
 
 ## LOGGING — log levels and formatting
 
@@ -444,7 +483,7 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 ## INTEGRATION — end-to-end scenarios (real pnpm)
 
 These requirements are validated only by `tests/integration/**` against
-real pnpm 10 and pnpm 11 binaries.
+real pnpm 10, 11, and 12 binaries.
 
 - **REQ-INT-PNPM10-001** — Against a pnpm 10 workspace with a vulnerable
   direct catalog dep, the catalog version SHALL be bumped and no override
@@ -468,3 +507,9 @@ real pnpm 10 and pnpm 11 binaries.
   `pnpm-workspace.yaml` contains a `minimumReleaseAge` setting,
   `refreshDeps` SHALL NOT zero or otherwise alter that setting during
   the run.
+- **REQ-INT-PNPM12-001** — Against a pnpm 12 workspace with a vulnerable
+  direct catalog dep, the catalog SHALL be promoted to a safe version and
+  release-age settings SHALL remain configured.
+- **REQ-INT-PNPM12-002** — Against a pnpm 12 workspace with no
+  `pnpm-workspace.yaml` and a root `workspaces` field, the tool SHALL retain
+  the file generated by pnpm during install and use its package globs.

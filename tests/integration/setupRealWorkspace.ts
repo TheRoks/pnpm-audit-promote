@@ -30,6 +30,9 @@ export function expectedPnpmMajor(): number | null {
  */
 export function detectPnpmMajor(): number | null {
   const result = spawnSync('pnpm', ['--version'], {
+    // Keep repository-level packageManager/Corepack pins from masking the
+    // version installed by the integration matrix.
+    cwd: os.tmpdir(),
     encoding: 'utf8',
     shell: process.platform === 'win32',
   });

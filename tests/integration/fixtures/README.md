@@ -10,10 +10,12 @@ real `pnpm` and the `refreshDeps` API. Tests are gated behind
 Each fixture deliberately pins a known-vulnerable version with a stable
 fix:
 
-| Fixture            | Vulnerable dep   | Advisory                                  | Fixed in  |
-| ------------------ | ---------------- | ----------------------------------------- | --------- |
-| `v10-direct-vuln/` | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution) | `4.17.21` |
-| `v11-direct-vuln/` | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution) | `4.17.21` |
+| Fixture                      | Vulnerable dep   | Advisory                                           | Fixed in  |
+| ---------------------------- | ---------------- | -------------------------------------------------- | --------- |
+| `v10-direct-vuln/`           | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
+| `v11-direct-vuln/`           | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
+| `v12-direct-vuln/`           | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
+| `v12-workspaces-autocreate/` | —                | pnpm 12.7 creates workspace YAML from `workspaces` | —         |
 
 If the npm registry ever unpublishes one of these versions, refresh the
 fixture with the next stable equivalent — the harness will fail loudly so
@@ -23,7 +25,7 @@ the drift cannot pass silently.
 
 - No `node_modules/` or `pnpm-lock.yaml` committed — the harness expects to
   install fresh.
-- Each fixture is self-contained (root `package.json` declares pnpm via
-  `packageManager` for v10 or `devEngines.packageManager` for v11).
+- Each fixture is self-contained (root `package.json` declares its pnpm
+  version via `packageManager` or `devEngines.packageManager`).
 - Children (under `apps/`) reference the catalog with `catalog:` so a
   catalog bump propagates without further edits.

@@ -34,10 +34,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         run: pnpm run check:exports
 
-  # Smoke-test the built CLI against a workspace that uses pnpm 11. The
-  # toolchain itself stays on pnpm 10 (see packageManager in package.json),
-  # so this job uses npm to install pnpm@11 globally rather than relying on
-  # corepack/pnpm-action-setup picking it up.
+  # Smoke-test the built CLI against a workspace that uses pnpm 11. The repo
+  # toolchain follows the exact packageManager pin in package.json.
   integration-pnpm11:
     name: Integration (pnpm 11)
     runs-on: ubuntu-latest
@@ -48,12 +46,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Install repo deps and build CLI (with pnpm 10)
+      - name: Install repo deps and build CLI (with repo pnpm pin)
         run: |
           pnpm install --frozen-lockfile
           pnpm run build
-      - name: Install pnpm 11 alongside pnpm 10
-        run: npm install -g pnpm@11
+      - name: Install pnpm 11 target
+        run: npm install -g pnpm@11.1.2
       - name: Smoke test against examples/pnpm11 (dry-run)
         run: |
           pnpm --version
@@ -72,29 +70,46 @@ jobs:
   # Real-pnpm integration tests under tests/integration/. Gated by
   # RUN_INTEGRATION=1 (see scripts/run-integration.mjs). Uses fixtures with
   # a pinned-vulnerable lodash@4.17.20 to exercise the full audit + promote
-  # flow against pnpm 10 and pnpm 11. Path-filtered to source / integration
-  # changes so PRs touching only docs don't pay the install cost.
+  # flow against pnpm 10, 11, and 12. pnpm 12 also runs on macOS and Windows
+  # to cover its native executables across supported CI platforms.
   integration:
     name: Integration (pnpm ${{ matrix.pnpm-major }})
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pnpm-major: [10, 11]
+        include:
+          - os: ubuntu-latest
+            pnpm-major: 10
+            pnpm-version: 10.33.0
+          - os: ubuntu-latest
+            pnpm-major: 11
+            pnpm-version: 11.1.2
+          - os: ubuntu-latest
+            pnpm-major: 12
+            pnpm-version: 12.8.1
+          - os: macos-latest
+            pnpm-major: 12
+            pnpm-version: 12.8.1
+          - os: windows-latest
+            pnpm-major: 12
+            pnpm-version: 12.8.1
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: 22
+          node-version: 22.13.0
           cache: pnpm
-      - name: Install repo deps (with pnpm 10 toolchain)
+      - name: Install repo dependencies
         run: pnpm install --frozen-lockfile
-      - name: Install pnpm ${{ matrix.pnpm-major }} as the integration target
-        if: matrix.pnpm-major != 10
-        run: npm install -g pnpm@${{ matrix.pnpm-major }}
+      - name: Install pnpm ${{ matrix.pnpm-version }} as the integration target
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pnpm-target" "pnpm@${{ matrix.pnpm-version }}"
+          echo "$RUNNER_TEMP/pnpm-target/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Run integration suite
         env:
           RUN_INTEGRATION: '1'
           INTEGRATION_PNPM_MAJOR: ${{ matrix.pnpm-major }}
-        run: pnpm run test:integration
+        run: node scripts/run-integration.mjs

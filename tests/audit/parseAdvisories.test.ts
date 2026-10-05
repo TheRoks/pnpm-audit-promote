@@ -1,5 +1,51 @@
-import { describe, expect, it } from 'vitest';
-import { advisoryMatchesIgnoreList } from '../../src/audit/parseAdvisories';
+import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  advisoryMatchesIgnoreList,
+  getDirectDepCatalogBumps,
+} from '../../src/audit/parseAdvisories';
+import { silentLogger } from '../../src/logger';
+import { WorkspaceState } from '../../src/workspace';
+import { makeRecordingRunner } from '../helpers/recordingRunner';
+
+let tmp: string | undefined;
+
+afterEach(() => {
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  tmp = undefined;
+});
+
+describe('getDirectDepCatalogBumps', () => {
+  it('REQ-AUDIT-014: skips a catalog bump when published versions do not satisfy the patched range', async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pap-advisory-'));
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-workspace.yaml'),
+      "catalog:\n  '@nx/azure-cache': 5.0.7\n",
+      'utf8',
+    );
+    const state = WorkspaceState.initialize(tmp);
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: '@nx/azure-cache',
+          vulnerable_versions: '<=5.0.7',
+          patched_versions: '>=21.0.0',
+        },
+      },
+    });
+    const { runner } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view @nx/azure-cache versions --json': JSON.stringify(['5.0.7', '21.0.0-beta.0']),
+    });
+
+    const result = await getDirectDepCatalogBumps(state, runner, silentLogger);
+
+    expect(result.bumps).toEqual(new Map());
+    expect(result.tiers).toEqual(new Map());
+  });
+});
 
 describe('advisoryMatchesIgnoreList', () => {
   it('REQ-AUDIT-011: returns false when ignoredIds is empty', () => {

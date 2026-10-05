@@ -109,10 +109,12 @@ export function selectSafeBump(
   if (!range) return null;
 
   const candidates = (available.length > 0 ? available : fallbackCandidates(range))
+    // Check the original registry string before coercing it: `semver.coerce`
+    // strips prerelease identifiers, so `21.0.0-beta.0` would otherwise be
+    // mistaken for a published stable `21.0.0`.
+    .filter((v) => !semver.prerelease(v))
     .map((v) => semver.coerce(v)?.version)
     .filter((v): v is string => Boolean(v))
-    // Drop prereleases — promoting a prerelease into a catalog is rarely desired.
-    .filter((v) => !semver.prerelease(v))
     .filter((v) => semver.satisfies(v, range, { includePrerelease: false }))
     .filter((v) => semver.gte(v, currentClean));
 

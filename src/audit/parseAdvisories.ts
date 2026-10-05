@@ -138,21 +138,26 @@ export async function getDirectDepCatalogBumps(
     const patchedRange = adv.patched_versions ?? '';
     let chosen: string | null = null;
     let tier: BumpTier | null = null;
+    let available: string[] = [];
 
     if (current) {
-      const available = await getAvailableVersions(pnpm, module, versionCache);
+      available = await getAvailableVersions(pnpm, module, versionCache);
       const safe = selectSafeBump(current, patchedRange, available);
       if (safe) {
         chosen = safe.version;
         tier = safe.tier;
-      } else {
+      } else if (available.length === 0) {
         logger.warn(
           `No non-vulnerable version >= ${current} found for ${module} (range: ${patchedRange}). Falling back to advisory-suggested version.`,
+        );
+      } else {
+        logger.warn(
+          `No published non-vulnerable version >= ${current} found for ${module} (range: ${patchedRange}); skipping the catalog bump.`,
         );
       }
     }
 
-    if (!chosen) {
+    if (!chosen && (!current || available.length === 0)) {
       // Fallback: advisory-derived concrete version (legacy behavior).
       chosen = getConcreteVersion(patchedRange);
       if (chosen && current) {

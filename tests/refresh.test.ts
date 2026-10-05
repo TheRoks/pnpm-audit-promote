@@ -270,6 +270,62 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     expect(final).toContain("react: '18.3.1'");
   });
 
+  it('REQ-OVERRIDES-009: skips unpublished direct and transitive audit overrides before reinstall', async () => {
+    const workspacePath = path.join(tmp, 'pnpm-workspace.yaml');
+    const initialYaml = "catalog:\n  '@nx/azure-cache': 5.0.7\n";
+    fs.writeFileSync(workspacePath, initialYaml, 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.1.2' }),
+      'utf8',
+    );
+
+    const auditJson = JSON.stringify({
+      advisories: {
+        '1': {
+          module_name: '@nx/azure-cache',
+          vulnerable_versions: '<=5.0.7',
+          patched_versions: '>=5.0.8',
+        },
+      },
+    });
+    const { runner, calls } = makeRecordingRunner({
+      'audit --json': auditJson,
+      'view @nx/azure-cache versions --json': JSON.stringify(['5.0.7', '21.0.0-beta.0']),
+      'view node-forge versions --json': JSON.stringify(['1.4.0']),
+    });
+    const runnerWithAuditOverride = {
+      ...runner,
+      async runAllowFail(args: string[]) {
+        const code = await runner.runAllowFail(args);
+        if (args[0] === 'audit' && args.includes('--fix')) {
+          fs.writeFileSync(
+            workspacePath,
+            `${initialYaml}\noverrides:\n  '@nx/azure-cache': 5.0.8\n  'node-forge@<1.4.1': '^1.4.1'\n`,
+            'utf8',
+          );
+        }
+        return code;
+      },
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runnerWithAuditOverride,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const final = fs.readFileSync(workspacePath, 'utf8');
+    expect(final).toContain("'@nx/azure-cache': 5.0.7");
+    expect(final).not.toContain('5.0.8');
+    expect(final).not.toContain('node-forge');
+    expect(final).not.toContain('overrides:');
+    expect(calls.filter((call) => call.args[0] === 'install')).toHaveLength(2);
+  });
+
   it('REQ-AUDIT-001: prefers patch over minor when both satisfy the advisory', async () => {
     const yaml = "catalog:\n  react: '18.2.0'\n";
     fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), yaml, 'utf8');

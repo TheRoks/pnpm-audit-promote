@@ -165,6 +165,11 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-OVERRIDES-008** — After all `pnpm.overrides` entries are removed
   from a `package.json`, the now-empty `overrides` key and, if it becomes
   empty, its parent `pnpm` key SHALL also be removed.
+- **REQ-OVERRIDES-009** — Before post-audit installation, the tool SHALL
+  validate semver audit overrides against published stable versions when
+  registry versions are available. If none satisfies an override, it SHALL
+  drop that audit-generated override. For catalog-eligible range overrides,
+  it SHALL promote the lowest published stable version satisfying the range.
 
 ## AUDIT — direct-dep handling and bump selection
 
@@ -173,9 +178,11 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   advisory's patched range, (b) is greater than or equal to the currently
   installed version, and (c) minimises version distance — preferring a
   patch increment over a minor increment over a major increment. When no
-  published version satisfies the criteria, the minimum of the patched
-  range SHALL be used as a fallback. When a package appears in multiple
-  advisories, the highest per-advisory minimum SHALL be selected so all
+  published version satisfies the criteria but the registry version list
+  is available, the catalog bump SHALL be skipped. When the registry version
+  list is unavailable, the minimum of the patched range SHALL be used as a
+  fallback. When a package appears in multiple advisories, the highest
+  per-advisory minimum SHALL be selected so all
   advisories are simultaneously satisfied.
 - **REQ-AUDIT-002** — When `allowMajor` is false, major-version bumps for
   direct deps SHALL be rejected and the vulnerability SHALL be left for
@@ -213,8 +220,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   `high`, and `critical`. When `auditLevel` is absent the default of `high`
   SHALL be preserved.
 - **REQ-AUDIT-014** — When no published version satisfies the advisory's
-  patched range, the minimum of the patched range SHALL be used as the
-  bump target.
+  patched range and the registry version list is available, the bump SHALL
+  be skipped. The minimum of the patched range SHALL be used only when the
+  registry version list is unavailable.
 
 ## PNPM10 — pnpm 10 specific behavior
 

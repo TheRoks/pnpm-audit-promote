@@ -20,7 +20,10 @@ import {
   applyPackageJsonDepBumps,
   getDirectDepPackageJsonBumps,
 } from './audit/bumpPackageJsonDeps';
-import { syncAuditOverridesIntoCatalog } from './audit/promoteWorkspaceOverrides';
+import {
+  guardWorkspaceOverrideAvailability,
+  syncAuditOverridesIntoCatalog,
+} from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
 import { guardWorkspaceOverrideReleaseAge } from './audit/releaseAge';
 import { migrateYamlOverridesToPackageJson } from './audit/ignoreWorkspaceMigration';
@@ -675,6 +678,8 @@ async function auditFix(
   if (options.mode === 'override' && options.releaseAgeCheck) {
     await guardWorkspaceOverrideReleaseAge(state, pnpm, logger);
   }
+
+  await guardWorkspaceOverrideAvailability(state, pnpm, logger);
 
   // Safety net: promote any catalog-eligible overrides into the catalog.
   state.desiredWorkspaceYaml = syncAuditOverridesIntoCatalog(state, logger);

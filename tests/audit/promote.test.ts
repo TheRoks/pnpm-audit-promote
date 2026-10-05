@@ -4,8 +4,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { WorkspaceState } from '../../src/workspace';
 import { silentLogger } from '../../src/logger';
-import { syncAuditOverridesIntoCatalog } from '../../src/audit/promoteWorkspaceOverrides';
+import {
+  guardWorkspaceOverrideAvailability,
+  syncAuditOverridesIntoCatalog,
+} from '../../src/audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from '../../src/audit/promotePackageJsonOverrides';
+import { makeRecordingRunner } from '../helpers/recordingRunner';
 
 let tmp: string;
 
@@ -22,6 +26,39 @@ function writeWorkspace(yaml: string, pkgJson?: string): WorkspaceState {
   if (pkgJson) fs.writeFileSync(path.join(tmp, 'package.json'), pkgJson, 'utf8');
   return WorkspaceState.initialize(tmp);
 }
+
+describe('guardWorkspaceOverrideAvailability', () => {
+  it('REQ-OVERRIDES-009: drops catalog and transitive overrides with unpublished targets', async () => {
+    const yaml =
+      "catalog:\n  '@nx/azure-cache': 5.0.7\n\noverrides:\n  '@nx/azure-cache': 5.0.8\n  '@nx/azure-cache@<=5.0.7': '>=5.0.8'\n  'node-forge@<1.4.1': '^1.4.1'\n";
+    const state = writeWorkspace(yaml);
+    const { runner } = makeRecordingRunner({
+      'view @nx/azure-cache versions --json': JSON.stringify(['5.0.7', '21.0.0-beta.0']),
+      'view node-forge versions --json': JSON.stringify(['1.4.0']),
+    });
+
+    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
+
+    const guarded = state.readWorkspaceYaml();
+    expect(guarded).toContain("'@nx/azure-cache': 5.0.7");
+    expect(guarded).not.toContain('overrides:');
+    expect(state.desiredWorkspaceYaml).toBe(guarded);
+  });
+
+  it('REQ-OVERRIDES-009: promotes a range to its lowest published stable match', async () => {
+    const yaml = "catalog:\n  vite: 6.3.5\n\noverrides:\n  'vite@<=6.4.1': '>=6.4.2'\n";
+    const state = writeWorkspace(yaml);
+    const { runner } = makeRecordingRunner({
+      'view vite versions --json': JSON.stringify(['6.3.5', '6.4.2-beta.1', '6.4.3', '6.5.0']),
+    });
+
+    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
+    const promoted = syncAuditOverridesIntoCatalog(state, silentLogger);
+
+    expect(promoted).toContain('vite: 6.4.3');
+    expect(promoted).not.toContain('vite@<=6.4.1');
+  });
+});
 
 describe('syncAuditOverridesIntoCatalog', () => {
   it('REQ-OVERRIDES-001: promotes catalog-eligible overrides into the catalog', () => {

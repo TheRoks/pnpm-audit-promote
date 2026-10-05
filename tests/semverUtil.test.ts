@@ -113,6 +113,11 @@ describe('selectSafeBump', () => {
     expect(r).toEqual({ version: '1.0.1', tier: 'patch' });
   });
 
+  it('REQ-AUDIT-010: does not coerce a prerelease into a stable published version', () => {
+    const r = selectSafeBump('5.0.7', '>=21.0.0', ['5.0.7', '21.0.0-beta.0']);
+    expect(r).toBeNull();
+  });
+
   it('returns null when current version cannot be coerced', () => {
     const r = selectSafeBump('not-a-version', '>=1.0.0', ['1.0.0']);
     expect(r).toBeNull();

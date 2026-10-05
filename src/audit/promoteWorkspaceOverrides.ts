@@ -1,6 +1,7 @@
 import semver from 'semver';
 import { isMap, isScalar, type Pair } from 'yaml';
 import type { Logger } from '../logger';
+import type { PnpmRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
 import { applyCatalogUpdatesToDoc, parseWorkspaceDoc, readCatalog, serializeDoc } from '../catalog';
 import {
@@ -11,6 +12,136 @@ import {
 } from '../semverUtil';
 import { reportPromotions } from './bumpReporting';
 import { collapseQualifiedOverrideEntries, type QualifiedOverrideEntry } from './overrideCollapse';
+import { getAvailableVersions } from './parseAdvisories';
+
+/**
+ * Validate audit-generated semver overrides against published registry
+ * versions before promotion. pnpm's advisory data can suggest versions that
+ * are not actually published; leaving such an override in place would make
+ * the post-audit install fail even when the override is transitive-only.
+ */
+export async function guardWorkspaceOverrideAvailability(
+  state: WorkspaceState,
+  pnpm: PnpmRunner,
+  logger: Logger,
+): Promise<void> {
+  if (!state.hasWorkspaceYaml) return;
+  const current = state.readWorkspaceYaml();
+  const doc = parseWorkspaceDoc(current);
+  if (!doc) return;
+
+  const overridesNode = doc.get('overrides', true);
+  if (!isMap(overridesNode)) return;
+
+  const { names: catalogNames, versions: catalogVersions } = readCatalog(current);
+  const eligible = new Map<Pair, { name: string; catalogPromotionEligible: boolean }>();
+  for (const item of overridesNode.items) {
+    const key = isScalar(item.key) ? String(item.key.value) : null;
+    const value = isScalar(item.value) ? String(item.value.value) : null;
+    if (key === null || value === null || (!semver.valid(value) && !normalizeRange(value))) {
+      continue;
+    }
+    const bareName = getBarePackageName(key);
+    if (!bareName) continue;
+    let catalogPromotionEligible = isPlainPackageName(key) && catalogNames.has(key);
+    const catalogVersion = catalogVersions.get(bareName);
+    const coercedCatalog = catalogVersion ? semver.coerce(catalogVersion)?.version : undefined;
+    const keyRange = key.slice(bareName.length + 1);
+    if (
+      !isPlainPackageName(key) &&
+      catalogNames.has(bareName) &&
+      coercedCatalog &&
+      semver.validRange(keyRange) &&
+      semver.satisfies(coercedCatalog, keyRange)
+    ) {
+      catalogPromotionEligible = true;
+    }
+    eligible.set(item, { name: bareName, catalogPromotionEligible });
+  }
+  if (eligible.size === 0) return;
+
+  const versionCache = new Map<string, string[]>();
+  const packageNames = new Set([...eligible.values()].map(({ name }) => name));
+  await Promise.all(
+    [...packageNames].map((name) => getAvailableVersions(pnpm, name, versionCache)),
+  );
+
+  const keepItems: Pair[] = [];
+  let changed = false;
+  for (const item of overridesNode.items) {
+    const target = eligible.get(item);
+    const value = isScalar(item.value) ? String(item.value.value) : null;
+    if (!target || value === null) {
+      keepItems.push(item);
+      continue;
+    }
+    const { name, catalogPromotionEligible } = target;
+
+    const available = versionCache.get(name) ?? [];
+    // An empty list means the registry lookup failed or returned no usable
+    // data. Keep the existing behavior when publication status is unknown.
+    if (available.length === 0) {
+      keepItems.push(item);
+      continue;
+    }
+
+    const currentVersion = catalogPromotionEligible ? catalogVersions.get(name) : undefined;
+    const selected = selectPublishedOverrideVersion(value, available, currentVersion);
+    if (selected === undefined) {
+      keepItems.push(item);
+      continue;
+    }
+    if (selected === null) {
+      changed = true;
+      logger.warn(
+        `Dropping audit override ${name} -> ${value}: no published stable version satisfies it; leaving the catalog unchanged.`,
+      );
+      continue;
+    }
+
+    if (catalogPromotionEligible && selected !== value && isScalar(item.value)) {
+      item.value.value = selected;
+      changed = true;
+      logger.detail(
+        `Adjusted audit override ${name} -> ${value} to published version ${selected}.`,
+      );
+    }
+    keepItems.push(item);
+  }
+
+  if (!changed) return;
+  if (keepItems.length === 0) {
+    doc.delete('overrides');
+  } else {
+    overridesNode.items = keepItems;
+  }
+  const next = serializeDoc(doc, current);
+  state.saveWorkspaceYaml(next);
+  state.desiredWorkspaceYaml = next;
+}
+
+/** `undefined` means the override is not a plain semver spec and is left alone. */
+function selectPublishedOverrideVersion(
+  value: string,
+  available: readonly string[],
+  current?: string,
+): string | null | undefined {
+  const currentClean = current ? semver.coerce(current)?.version : undefined;
+  const stableVersions = available
+    .map((version) => semver.valid(version))
+    .filter((version): version is string => version !== null && semver.prerelease(version) === null)
+    .filter((version) => !currentClean || semver.gte(version, currentClean))
+    .sort((a, b) => semver.compare(a, b));
+
+  const exact = semver.valid(value);
+  if (exact) {
+    return stableVersions.find((version) => semver.eq(version, exact)) ?? null;
+  }
+
+  const range = normalizeRange(value);
+  if (!range) return undefined;
+  return stableVersions.find((version) => semver.satisfies(version, range)) ?? null;
+}
 
 /**
  * Promote direct-dependency audit fixes from the workspace yaml `overrides:`

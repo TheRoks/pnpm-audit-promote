@@ -3,17 +3,24 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to publish (for example, v1.10.0)
+        required: true
+        type: string
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+permissions: {}
 
 jobs:
   release-please:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
     steps:
@@ -25,19 +32,41 @@ jobs:
 
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ always() && !cancelled() && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true')) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ inputs.tag || github.sha }}
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-      - run: pnpm publish --no-git-checks --access public
+      - name: Verify manually selected release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match package version $version"
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --json tagName --jq '.tagName' >/dev/null
+      - run: pnpm install --frozen-lockfile
+      - name: Install npm with trusted publishing support
+        run: npm install --global 'npm@^11.5.1'
+      - name: Verify package version is unpublished
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "pnpm-audit-promote@$version" version >/dev/null 2>&1; then
+            echo "::error::pnpm-audit-promote@$version is already published"
+            exit 1
+          fi
+      - run: npm publish --provenance --access public

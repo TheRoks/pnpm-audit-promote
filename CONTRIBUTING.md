@@ -79,5 +79,12 @@ silently replace the integration target.
 
 ## Releasing
 
-Releases trigger `pnpm publish` with npm provenance via GitHub Actions OIDC.
-Maintainers must configure the `NPM_TOKEN` secret.
+Releases publish with npm provenance through GitHub Actions OIDC. Configure an
+npm Trusted Publisher for `TheRoks/pnpm-audit-promote`, using the workflow file
+`release.yml`, leaving the environment blank, and allowing direct `npm publish`.
+The workflow uses npm CLI 11.5.1 or newer and does not need an `NPM_TOKEN` secret.
+
+To retry an existing GitHub release, run the **Release** workflow from `main`
+and enter its tag (for example, `v1.10.0`). The workflow checks that the tag is
+a GitHub release and matches `package.json`, then refuses to republish a version
+that is already on npm.

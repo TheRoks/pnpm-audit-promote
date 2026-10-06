@@ -10,6 +10,13 @@
 - Add opt-in `auditFixMode: 'update'` / `--audit-fix-mode update` for pnpm 11+.
 - Exercise pnpm 12 in real-pnpm integration coverage, including macOS and Windows.
 
+## [1.10.2](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.1...v1.10.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **release:** use npm OIDC publishing and add recovery dispatch ([#119](https://github.com/TheRoks/pnpm-audit-promote/issues/119)) ([1d0a3d2](https://github.com/TheRoks/pnpm-audit-promote/commit/1d0a3d21ac2490b9da2f8f1470beab89670f4cfd))
+
 ## [1.10.1](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.0...v1.10.1) (2026-10-05)
 
 

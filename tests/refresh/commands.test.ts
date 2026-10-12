@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { PnpmCommandFailedError } from '../../src/errors';
 import { silentLogger } from '../../src/logger';
 import { WorkspaceState } from '../../src/workspace';
 import { makeRecordingRunner } from '../helpers/recordingRunner';
@@ -50,6 +51,50 @@ describe('refresh command reconciliation', () => {
     ]);
     expect(fs.readFileSync(yamlPath, 'utf8')).toBe(desired);
     expect(state.yaml.desiredWorkspaceYaml).toBe(desired);
+  });
+
+  it('REQ-CORE-011: approves ignored builds on the workspace restoration install', async () => {
+    const state = createWorkspace(true);
+    const yamlPath = state.workspaceYaml;
+    const { runner } = makeRecordingRunner();
+    const calls: string[] = [];
+    let installAttempts = 0;
+    runner.run = async (args) => {
+      calls.push(args.join(' '));
+      installAttempts++;
+      if (installAttempts === 1) {
+        fs.writeFileSync(yamlPath, 'packages: []\n', 'utf8');
+      } else if (installAttempts === 2) {
+        throw new PnpmCommandFailedError(args, 1, 'ERR_PNPM_IGNORED_BUILDS');
+      }
+    };
+    runner.runInteractive = async (args) => {
+      calls.push(args.join(' '));
+      fs.writeFileSync(yamlPath, 'packages: []\nallowBuilds:\n  canvas: false\n', 'utf8');
+    };
+
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    try {
+      await runAndRestore(runner, state, silentLogger, ['install', '--no-frozen-lockfile']);
+    } finally {
+      if (stdinTty) Object.defineProperty(process.stdin, 'isTTY', stdinTty);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutTty) Object.defineProperty(process.stdout, 'isTTY', stdoutTty);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+
+    expect(calls).toEqual([
+      'install --no-frozen-lockfile',
+      'install --no-frozen-lockfile',
+      'approve-builds',
+      'install --no-frozen-lockfile',
+    ]);
+    const finalYaml = fs.readFileSync(yamlPath, 'utf8');
+    expect(finalYaml).toContain('react: 18.0.0');
+    expect(finalYaml).toContain('canvas: false');
   });
 
   it('REQ-CORE-010: adopts a workspace YAML created by pnpm during the run', () => {

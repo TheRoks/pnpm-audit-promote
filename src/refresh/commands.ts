@@ -10,6 +10,26 @@ export async function runAndRestore(
   logger: Logger,
   args: string[],
 ): Promise<void> {
+  await runWithBuildApproval(pnpm, state, logger, args);
+
+  if (state.yaml.refreshHasWorkspaceYaml()) {
+    logger.detail(`Detected pnpm-workspace.yaml created by pnpm ${args[0]}.`);
+  }
+  if (state.yaml.restoreWorkspaceYaml(logger)) {
+    await runWithBuildApproval(pnpm, state, logger, [...INSTALL_ARGS]);
+    if (state.yaml.refreshHasWorkspaceYaml()) {
+      logger.detail('Detected pnpm-workspace.yaml created by pnpm install.');
+    }
+    state.yaml.restoreWorkspaceYaml(logger);
+  }
+}
+
+async function runWithBuildApproval(
+  pnpm: PnpmCommandRunner,
+  state: WorkspaceState,
+  logger: Logger,
+  args: string[],
+): Promise<void> {
   try {
     await pnpm.run(args);
   } catch (error) {
@@ -33,16 +53,6 @@ export async function runAndRestore(
     state.yaml.refreshHasWorkspaceYaml();
     state.yaml.preserveApprovedBuilds(logger);
     await pnpm.run(args);
-  }
-  if (state.yaml.refreshHasWorkspaceYaml()) {
-    logger.detail(`Detected pnpm-workspace.yaml created by pnpm ${args[0]}.`);
-  }
-  if (state.yaml.restoreWorkspaceYaml(logger)) {
-    await pnpm.run([...INSTALL_ARGS]);
-    if (state.yaml.refreshHasWorkspaceYaml()) {
-      logger.detail('Detected pnpm-workspace.yaml created by pnpm install.');
-    }
-    state.yaml.restoreWorkspaceYaml(logger);
   }
 }
 export function reconcileAfterAuditRead(state: WorkspaceState, logger: Logger): void {

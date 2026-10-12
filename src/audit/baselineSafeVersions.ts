@@ -1,5 +1,6 @@
 import semver from 'semver';
 import { parseAllDocuments } from 'yaml';
+import { parsePnpmAuditOutput, type PnpmAuditParseResult } from './pnpmAudit';
 
 /**
  * Read versions that were already present and not flagged by the initial
@@ -8,32 +9,27 @@ import { parseAllDocuments } from 'yaml';
  */
 export function readBaselineSafeVersions(
   lockfileYaml: string | null,
-  auditJson: string,
+  auditInput: string | PnpmAuditParseResult | null,
 ): ReadonlyMap<string, string> {
-  if (!lockfileYaml || !auditJson) return new Map();
+  if (!lockfileYaml) return new Map();
   let lockfile: unknown;
-  let audit: unknown;
   try {
     lockfile = readLockfileDocument(lockfileYaml);
-    audit = JSON.parse(auditJson);
   } catch {
     return new Map();
   }
   if (!isRecord(lockfile) || !isRecord(lockfile['packages'])) return new Map();
-  if (!isRecord(audit) || !isRecord(audit['advisories'])) return new Map();
+  const audit = typeof auditInput === 'string' ? parsePnpmAuditOutput(auditInput) : auditInput;
+  if (!audit?.complete) return new Map();
 
   const vulnerable = new Map<string, Set<string>>();
-  for (const advisory of Object.values(audit['advisories'])) {
-    if (!isRecord(advisory) || typeof advisory['module_name'] !== 'string') continue;
-    const findings = advisory['findings'];
-    if (!Array.isArray(findings)) continue;
-    const versions = vulnerable.get(advisory['module_name']) ?? new Set<string>();
-    for (const finding of findings) {
-      if (isRecord(finding) && typeof finding['version'] === 'string') {
-        versions.add(finding['version']);
-      }
+  for (const advisory of Object.values(audit.audit.advisories)) {
+    if (!advisory.module_name || !advisory.findings) continue;
+    const versions = vulnerable.get(advisory.module_name) ?? new Set<string>();
+    for (const finding of advisory.findings) {
+      if (finding.version) versions.add(finding.version);
     }
-    vulnerable.set(advisory['module_name'], versions);
+    vulnerable.set(advisory.module_name, versions);
   }
 
   const safe = new Map<string, string>();

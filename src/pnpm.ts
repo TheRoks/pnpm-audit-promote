@@ -3,15 +3,21 @@ import * as path from 'node:path';
 import { type Logger } from './logger';
 import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors';
 
-export interface PnpmRunner {
+export interface PnpmCommandRunner {
   /** Run pnpm and throw on non-zero exit. */
   run(args: string[]): Promise<void>;
   /** Run an interactive pnpm command with the terminal attached. */
   runInteractive?(args: string[]): Promise<void>;
-  /** Run pnpm and return its captured stdout. Does not throw on non-zero. */
-  capture(args: string[]): Promise<{ stdout: string; exitCode: number }>;
   /** Run pnpm without throwing on non-zero exit. */
   runAllowFail(args: string[]): Promise<number>;
+}
+
+export interface PnpmCaptureRunner {
+  /** Run pnpm and return its captured stdout. Does not throw on non-zero. */
+  capture(args: string[]): Promise<{ stdout: string; exitCode: number }>;
+}
+
+export interface PnpmVersionReader {
   /**
    * Return the pnpm version string reported by `pnpm --version` (e.g. `10.33.0`
    * or `11.0.0`). Cached after the first call. Returns an empty string when
@@ -19,6 +25,9 @@ export interface PnpmRunner {
    */
   version(): Promise<string>;
 }
+
+/** Composite runner contract retained for public injection and integrations. */
+export interface PnpmRunner extends PnpmCommandRunner, PnpmCaptureRunner, PnpmVersionReader {}
 
 /**
  * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, `12.0.0`, ...) into its major

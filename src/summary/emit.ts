@@ -1,14 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../logger';
-import type { PnpmRunner } from '../pnpm';
+import type { PnpmCaptureRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
-import {
-  extractAdvisoriesWithStatus,
-  readAllOverrides,
-  readCatalogSnapshot,
-  safeReadFile,
-} from './collect';
+import { extractAdvisoriesWithStatus, readCatalogSnapshot, safeReadFile } from './collect';
+import { readAllOverrides } from '../workspaceOverrides';
 import { renderTerminalSummary } from './render';
 import type {
   AdvisorySummary,
@@ -24,7 +20,7 @@ import type {
  */
 export interface CollectRunSummaryArgs {
   state: WorkspaceState;
-  pnpm: PnpmRunner;
+  pnpm: PnpmCaptureRunner;
   skipAudit: boolean;
   dryRun: boolean;
   durationMs: number;
@@ -47,7 +43,8 @@ export interface CollectRunSummaryArgs {
 export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<RunSummaryData> {
   const { state, pnpm, skipAudit, dryRun } = args;
 
-  const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
+  const finalYaml =
+    state.yaml.desiredWorkspaceYaml || (dryRun ? '' : state.yaml.readWorkspaceYaml());
   const finalPjText = safeReadFile(state.rootPackageJson);
   const finalCatalog = readCatalogSnapshot(finalYaml);
   const finalOverrides = readAllOverrides(finalYaml, finalPjText);

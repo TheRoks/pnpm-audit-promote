@@ -6,9 +6,14 @@ import { WorkspaceState } from '../../src/workspace';
 import { silentLogger } from '../../src/logger';
 import {
   guardWorkspaceOverrideAvailability,
+  planAuditOverridesIntoCatalog,
+  planWorkspaceOverrideAvailability,
   syncAuditOverridesIntoCatalog,
 } from '../../src/audit/promoteWorkspaceOverrides';
-import { syncPackageJsonOverridesIntoCatalog } from '../../src/audit/promotePackageJsonOverrides';
+import {
+  planPackageJsonOverridesIntoCatalog,
+  syncPackageJsonOverridesIntoCatalog,
+} from '../../src/audit/promotePackageJsonOverrides';
 import { makeRecordingRunner } from '../helpers/recordingRunner';
 
 let tmp: string;
@@ -27,6 +32,52 @@ function writeWorkspace(yaml: string, pkgJson?: string): WorkspaceState {
   return WorkspaceState.initialize(tmp);
 }
 
+describe('override promotion plans', () => {
+  it('REQ-OVERRIDES-001: plans workspace catalog promotion without applying filesystem effects', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  'vite@<=6.4.1': '>=6.4.2'\n";
+
+    const plan = planAuditOverridesIntoCatalog(yaml);
+
+    expect(plan.changed).toBe(true);
+    expect(plan.promotions.get('vite')).toBe('>=6.4.2');
+    expect(plan.yaml).toContain("vite: '>=6.4.2'");
+    expect(yaml).toContain("vite: '6.3.5'");
+  });
+
+  it('REQ-OVERRIDES-010: plans published safe versions from explicit registry and baseline snapshots', () => {
+    const yaml = "overrides:\n  'fast-xml-parser@<5.7.0': '5.11.2'\n";
+
+    const plan = planWorkspaceOverrideAvailability({
+      yaml,
+      availableVersions: new Map([['fast-xml-parser', ['5.7.0', '5.11.2']]]),
+      originalOverrides: new Map([
+        ['fast-xml-parser@<5.7.0', { value: '^5.7.0', source: 'workspace' as const }],
+      ]),
+    });
+
+    expect(plan.changed).toBe(true);
+    expect(plan.yaml).toContain("'fast-xml-parser@<5.7.0': '^5.7.0'");
+    expect(yaml).toContain("'fast-xml-parser@<5.7.0': '5.11.2'");
+  });
+
+  it('REQ-OVERRIDES-003: plans package.json override removal and catalog promotion without I/O', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    const packageJsonText = JSON.stringify(
+      { name: 'root', pnpm: { overrides: { 'vite@<=6.4.1': '>=6.4.2' } } },
+      null,
+      2,
+    );
+
+    const plan = planPackageJsonOverridesIntoCatalog(packageJsonText, yaml);
+
+    expect(plan.changed).toBe(true);
+    expect(plan.promotions.get('vite')).toBe('>=6.4.2');
+    expect(plan.yaml).toContain("vite: '>=6.4.2'");
+    expect(JSON.parse(plan.packageJsonText)).toEqual({ name: 'root' });
+    expect(JSON.parse(packageJsonText)).toHaveProperty('pnpm.overrides');
+  });
+});
+
 describe('guardWorkspaceOverrideAvailability', () => {
   it("REQ-OVERRIDES-010: keeps an audited-safe locked version above pnpm audit's patched minimum", async () => {
     const state = writeWorkspace('overrides:\n  pdfjs-dist@<=4.1.392: 4.2.67\n');
@@ -35,7 +86,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     });
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map([['pdfjs-dist', '4.10.38']]),
@@ -51,7 +102,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     });
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map([['transitive', '1.4.0']]),
@@ -71,7 +122,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     ]);
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map(),
@@ -97,7 +148,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     ]);
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map(),
@@ -119,7 +170,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
       ]),
     });
 
-    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
+    await guardWorkspaceOverrideAvailability(state.yaml, runner, silentLogger);
 
     expect(state.readWorkspaceYaml()).toContain("'smol-toml@<=1.8.0': '^1.9.0'");
   });
@@ -131,7 +182,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     });
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map([['transitive', '1.4.0']]),
@@ -156,7 +207,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     };
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       logger,
       new Map(),
@@ -176,7 +227,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     });
 
     await guardWorkspaceOverrideAvailability(
-      state,
+      state.yaml,
       runner,
       silentLogger,
       new Map([['transitive', '1.4.0']]),
@@ -194,7 +245,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
       'view node-forge versions --json': JSON.stringify(['1.4.0']),
     });
 
-    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
+    await guardWorkspaceOverrideAvailability(state.yaml, runner, silentLogger);
 
     const guarded = state.readWorkspaceYaml();
     expect(guarded).toContain("'@nx/azure-cache': 5.0.7");
@@ -209,8 +260,8 @@ describe('guardWorkspaceOverrideAvailability', () => {
       'view vite versions --json': JSON.stringify(['6.3.5', '6.4.2-beta.1', '6.4.3', '6.5.0']),
     });
 
-    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
-    const promoted = syncAuditOverridesIntoCatalog(state, silentLogger);
+    await guardWorkspaceOverrideAvailability(state.yaml, runner, silentLogger);
+    const promoted = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
 
     expect(promoted).toMatch(/vite:\s+["']>=6\.4\.3["']/);
     expect(promoted).not.toContain('vite@<=6.4.1');
@@ -222,7 +273,7 @@ describe('syncAuditOverridesIntoCatalog', () => {
     const yaml =
       "packages:\n  - 'apps/*'\n\ncatalog:\n  react: '18.2.0'\n  lodash: '4.17.20'\n\noverrides:\n  react: '18.3.1'\n  lodash: '4.17.21'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("react: '18.3.1'");
     expect(out).toContain("lodash: '4.17.21'");
     expect(out).not.toContain('overrides:');
@@ -232,7 +283,7 @@ describe('syncAuditOverridesIntoCatalog', () => {
     const yaml =
       "catalog:\n  react: '18.2.0'\n\noverrides:\n  react: '18.3.1'\n  'vite@>=7.0.0 <=7.3.1': '7.3.2'\n  unrelated: '1.0.0'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("react: '18.3.1'"); // promoted
     expect(out).toContain("'vite@>=7.0.0 <=7.3.1'"); // kept
     expect(out).toContain('unrelated'); // kept (not in catalog)
@@ -241,7 +292,7 @@ describe('syncAuditOverridesIntoCatalog', () => {
   it('REQ-OVERRIDES-001: returns current content when no catalog block', () => {
     const yaml = "overrides:\n  foo: '1.0.0'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toBe(yaml);
   });
 
@@ -252,7 +303,7 @@ describe('syncAuditOverridesIntoCatalog', () => {
       'utf8',
     );
     const state = WorkspaceState.initialize(tmp);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toBe('');
     expect(fs.existsSync(path.join(tmp, 'pnpm-workspace.yaml'))).toBe(false);
   });
@@ -536,7 +587,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "packages:\n  - 'apps/*'\n\ncatalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("vite: '>=6.4.2'");
     expect(out).not.toContain('vite@<=6.4.1');
     expect(out).not.toContain('overrides:');
@@ -546,7 +597,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  'vite@<=6.4.1': '^6.4.2'\n";
     const state = writeWorkspace(yaml);
 
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
 
     expect(out).toContain("vite: '^6.4.2'");
     expect(out).not.toContain('overrides:');
@@ -557,7 +608,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.4.3'\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("vite: '6.4.3'");
     expect(out).not.toContain('overrides:');
   });
@@ -566,7 +617,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     // Override proposes 6.2.0 but catalog already pins 6.3.5 — must not regress.
     const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.2.0'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("vite: '6.3.5'"); // catalog version unchanged
     expect(out).not.toContain("vite: '6.2.0'");
   });
@@ -575,7 +626,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     // Override matches the catalog exactly — no-op, no overrides block.
     const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite: '6.3.5'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("vite: '6.3.5'"); // catalog unchanged
     // The redundant override should be removed (not promoted, not kept)
     expect(out.indexOf("vite: '6.3.5'")).toBe(out.lastIndexOf("vite: '6.3.5'")); // only one occurrence
@@ -585,7 +636,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     // Catalog already at 6.4.2, override selector <=6.4.1 does NOT match → keep.
     const yaml = "catalog:\n  vite: '6.4.2'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain('vite@<=6.4.1');
     expect(out).toContain("vite: '6.4.2'"); // catalog unchanged
   });
@@ -597,7 +648,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog:\n  react: '18.2.0'\n\noverrides:\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'axios@>=1.0.0 <1.15.2': '>=1.15.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain('axios@>=1.0.0 <1.15.2');
     expect(out).toContain("'^1.15.2'");
     expect(out).not.toContain('<1.15.1');
@@ -614,7 +665,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     ].join('\n');
 
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
 
     const matches = out.match(/serialize-javascript@[^'"\s]+/g) ?? [];
     expect(matches).toEqual(['serialize-javascript@<7.0.5']);
@@ -626,7 +677,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog: {}\n\noverrides:\n  'foo@>=1.0.0 <2.0.0': '>=1.5.0'\n  'foo@>=1.0.0  <2.0.0': '>=1.7.0'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("'foo@>=1.0.0 <2.0.0': '^1.7.0'");
     expect(out).not.toContain('foo@>=1.0.0  <2.0.0');
   });
@@ -635,7 +686,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog: {}\n\noverrides:\n  'tiny@>=0.7.0 <0.8.0': '>=0.7.4'\n  'tiny@>=0.7.1 <0.8.0': '>=0.7.5'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("'tiny@>=0.7.0 <0.8.0': '^0.7.5'");
     expect(out).not.toContain('tiny@>=0.7.1 <0.8.0');
   });
@@ -644,7 +695,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog: {}\n\noverrides:\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'lodash@>=4.0.0 <4.18.0': '>=4.18.0'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain('axios@>=1.0.0 <1.15.1');
     expect(out).toContain('lodash@>=4.0.0 <4.18.0');
   });
@@ -653,7 +704,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
     const yaml =
       "catalog:\n  react: '18.2.0'\n\noverrides:\n  react: '18.3.1'\n  'axios@>=1.0.0 <1.15.1': '>=1.15.1'\n  'axios@>=1.0.0 <1.15.2': '>=1.15.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("react: '18.3.1'"); // promoted
     expect(out).toContain('axios@>=1.0.0 <1.15.2');
     expect(out).toContain("'^1.15.2'");
@@ -682,7 +733,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
       '',
     ].join('\n');
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
 
     // Exactly one tar entry: the broadest selector with the strongest fix.
     const tarMatches = out.match(/tar@[^'"\s]+/g) ?? [];
@@ -712,7 +763,7 @@ describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
       '',
     ].join('\n');
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     const tarMatches = out.match(/tar@[^'":\s]+/g) ?? [];
     expect(tarMatches).toEqual(['tar@<=7.5.10']);
     expect(out).toContain("'^7.5.11'");
@@ -730,7 +781,7 @@ describe('cross-major warning', () => {
         warnings.push(msg);
       },
     };
-    const out = syncAuditOverridesIntoCatalog(state, logger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, logger);
     expect(out).toContain("react: '18.3.1'");
     expect(warnings.some((w) => /Major bump promoted for react/.test(w))).toBe(true);
   });
@@ -745,7 +796,7 @@ describe('cross-major warning', () => {
         warnings.push(msg);
       },
     };
-    syncAuditOverridesIntoCatalog(state, logger);
+    syncAuditOverridesIntoCatalog(state.yaml, logger);
     expect(warnings).toEqual([]);
   });
 
@@ -754,7 +805,7 @@ describe('cross-major warning', () => {
     // Its minimum no longer satisfies <=6.4.1, so the override is discarded.
     const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
-    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+    const out = syncAuditOverridesIntoCatalog(state.yaml, silentLogger);
     expect(out).toContain("vite: '>=6.4.2'");
     expect(out).not.toContain('vite@<=6.4.1');
     expect(out).not.toContain('overrides:');

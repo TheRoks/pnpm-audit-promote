@@ -1,169 +1,29 @@
 import semver from 'semver';
-import picomatch from 'picomatch';
-import { parse as parseYaml, isMap, isScalar, type Pair } from 'yaml';
+import { isMap, isScalar, type Pair } from 'yaml';
 import type { Logger } from '../logger';
-import type { PnpmRunner } from '../pnpm';
-import type { WorkspaceState } from '../workspace';
-import { parseWorkspaceDoc, serializeDoc } from '../catalog';
+import type { PnpmCaptureRunner } from '../pnpm';
+import { fetchPublishTimes } from './releaseAgeRegistry';
+import { getAvailableVersions } from './registry';
+import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
+import { parseWorkspaceDoc, serializeDoc } from '../workspaceYaml';
 import { getBarePackageName } from '../semverUtil';
-import { getAvailableVersions } from './parseAdvisories';
-
-/**
- * Parse the top-level `minimumReleaseAge` (minutes) from a
- * `pnpm-workspace.yaml` file. Returns the positive numeric value when present,
- * `null` otherwise (absent, zero, negative, or unparseable). pnpm only enforces
- * the release-age gate when this value is `> 0`, so `null` means "guard
- * inactive".
- */
-export function readMinimumReleaseAge(yamlContent: string): number | null {
-  if (!yamlContent.trim()) return null;
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(yamlContent);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== 'object') return null;
-  const value = (parsed as Record<string, unknown>)['minimumReleaseAge'];
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-  if (typeof value === 'string') {
-    const n = Number.parseInt(value.trim(), 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-  return null;
-}
-
-/** A single parsed `minimumReleaseAgeExclude` entry. */
-export interface ReleaseAgeExcludeEntry {
-  /** Package-name glob (e.g. `lodash`, `@myorg/*`). */
-  name: string;
-  /** Optional semver range qualifier (the part after `@`). */
-  range?: string;
-}
-
-function splitNameAndRange(spec: string): ReleaseAgeExcludeEntry {
-  const at = spec.startsWith('@') ? spec.indexOf('@', 1) : spec.indexOf('@');
-  if (at <= 0) return { name: spec };
-  const range = spec.slice(at + 1).trim();
-  return range ? { name: spec.slice(0, at), range } : { name: spec.slice(0, at) };
-}
-
-/**
- * Parse the user's `minimumReleaseAgeExclude` block (string-sequence or
- * mapping form) into structured entries. Returns `[]` on any parse failure or
- * when the block is absent.
- */
-export function parseMinimumReleaseAgeExclude(yamlContent: string): ReleaseAgeExcludeEntry[] {
-  if (!yamlContent.trim()) return [];
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(yamlContent);
-  } catch {
-    return [];
-  }
-  if (parsed === null || typeof parsed !== 'object') return [];
-  const raw = (parsed as Record<string, unknown>)['minimumReleaseAgeExclude'];
-  const entries: ReleaseAgeExcludeEntry[] = [];
-  if (Array.isArray(raw)) {
-    for (const item of raw) {
-      if (typeof item === 'string' && item.trim()) entries.push(splitNameAndRange(item.trim()));
-    }
-  } else if (raw !== null && typeof raw === 'object') {
-    for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof value === 'string' && value.trim()) entries.push({ name, range: value.trim() });
-      else entries.push({ name });
-    }
-  }
-  return entries;
-}
-
-function nameMatches(name: string, pattern: string): boolean {
-  try {
-    return picomatch(pattern)(name);
-  } catch {
-    return name === pattern;
-  }
-}
-
-/**
- * Determine whether the user's `minimumReleaseAgeExclude` list already covers
- * `name`/`version`, meaning the user has opted that package out of the
- * release-age gate and the override must be kept untouched.
- */
-export function isExcludedByReleaseAge(
-  name: string,
-  version: string | null,
-  entries: readonly ReleaseAgeExcludeEntry[],
-): boolean {
-  for (const entry of entries) {
-    if (!nameMatches(name, entry.name)) continue;
-    if (!entry.range) return true;
-    if (version === null) return true;
-    const clean = semver.valid(version) ?? semver.coerce(version)?.version ?? null;
-    if (clean && semver.satisfies(clean, entry.range, { includePrerelease: true })) return true;
-  }
-  return false;
-}
-
-/**
- * Fetch the registry publish timestamps (`version -> ISO date`) for `pkg` via
- * `pnpm view <pkg> time --json`. Results are cached per call site. Returns an
- * empty map on any failure, which callers treat as "publish time unavailable"
- * (and therefore old enough, honouring `minimumReleaseAgeIgnoreMissingTime`).
- */
-export async function fetchPublishTimes(
-  pnpm: PnpmRunner,
-  pkg: string,
-  cache: Map<string, Map<string, string>>,
-): Promise<Map<string, string>> {
-  const cached = cache.get(pkg);
-  if (cached) return cached;
-  const times = new Map<string, string>();
-  try {
-    const { stdout } = await pnpm.capture(['view', pkg, 'time', '--json']);
-    const text = stdout.trim();
-    if (text) {
-      const parsed: unknown = JSON.parse(text);
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        for (const [version, iso] of Object.entries(parsed as Record<string, unknown>)) {
-          if (version === 'created' || version === 'modified') continue;
-          if (typeof iso === 'string' && semver.valid(version)) times.set(version, iso);
-        }
-      }
-    }
-  } catch {
-    // leave empty
-  }
-  cache.set(pkg, times);
-  return times;
-}
-
-/**
- * Whether a version published at `publishedIso` is at least `minutes` old as of
- * `now`. A missing or unparseable timestamp returns `true` (the version is
- * treated as allowed, honouring pnpm's `minimumReleaseAgeIgnoreMissingTime`).
- */
-export function isOldEnough(publishedIso: string | undefined, minutes: number, now: Date): boolean {
-  if (!publishedIso) return true;
-  const published = Date.parse(publishedIso);
-  if (Number.isNaN(published)) return true;
-  const ageMinutes = (now.getTime() - published) / 60_000;
-  return ageMinutes >= minutes;
-}
-
-/** An override dropped because no satisfying version is old enough. */
-export interface BlockedOverride {
-  /** The override key as written (may carry a selector). */
-  key: string;
-  /** Bare package name. */
-  name: string;
-  /** The override value pnpm wrote (exact version or range). */
-  value: string;
-  /** The configured minimum age that blocked the override. */
-  minimumReleaseAgeMinutes: number;
-}
+import {
+  isExcludedByReleaseAge,
+  parseMinimumReleaseAgeExclude,
+  readMinimumReleaseAge,
+  selectReleaseAgeCandidates,
+  shouldBlockOverrideForReleaseAge,
+  type BlockedOverride,
+} from './releaseAgePolicy';
+export {
+  isExcludedByReleaseAge,
+  isOldEnough,
+  parseMinimumReleaseAgeExclude,
+  readMinimumReleaseAge,
+  selectReleaseAgeCandidates,
+  shouldBlockOverrideForReleaseAge,
+} from './releaseAgePolicy';
+export type { BlockedOverride, ReleaseAgeExcludeEntry } from './releaseAgePolicy';
 
 /**
  * REQ-PNPM11-012: after `pnpm audit --fix`, verify every override pnpm wrote
@@ -181,16 +41,16 @@ export interface BlockedOverride {
  * and those for which no candidate version or publish time can be resolved.
  *
  * No-op when there is no workspace yaml, no `overrides` block, or no positive
- * `minimumReleaseAge`. Honours `dryRun` via {@link WorkspaceState.saveWorkspaceYaml}.
+ * `minimumReleaseAge`. Honours `dryRun` via the YAML snapshot.
  */
 export async function guardWorkspaceOverrideReleaseAge(
-  state: WorkspaceState,
-  pnpm: PnpmRunner,
+  yaml: WorkspaceYamlSnapshot,
+  pnpm: PnpmCaptureRunner,
   logger: Logger,
   options: { now?: Date } = {},
 ): Promise<BlockedOverride[]> {
-  if (!state.hasWorkspaceYaml) return [];
-  const current = state.readWorkspaceYaml();
+  if (!yaml.hasWorkspaceYaml) return [];
+  const current = yaml.readWorkspaceYaml();
   const minutes = readMinimumReleaseAge(current);
   if (minutes === null) return [];
 
@@ -216,31 +76,34 @@ export async function guardWorkspaceOverrideReleaseAge(
     }
 
     const name = getBarePackageName(key);
-    const refVersion = semver.valid(val) ?? semver.minVersion(val)?.version ?? null;
-    if (isExcludedByReleaseAge(name, refVersion, excludeEntries)) {
+    const referenceVersion = semver.valid(val) ?? semver.minVersion(val)?.version ?? null;
+    if (isExcludedByReleaseAge(name, referenceVersion, excludeEntries)) {
       keepItems.push(item);
       continue;
     }
 
-    let candidates: string[];
-    if (semver.valid(val)) {
-      candidates = [val];
-    } else if (semver.validRange(val)) {
-      const available = await getAvailableVersions(pnpm, name, versionsCache);
-      candidates = available.filter((v) => semver.satisfies(v, val, { includePrerelease: false }));
-    } else {
-      keepItems.push(item);
-      continue;
-    }
-
-    if (candidates.length === 0) {
+    const available =
+      !semver.valid(val) && semver.validRange(val)
+        ? await getAvailableVersions(pnpm, name, versionsCache)
+        : [];
+    const candidates = selectReleaseAgeCandidates(val, available);
+    if (!candidates || candidates.length === 0) {
       keepItems.push(item);
       continue;
     }
 
     const times = await fetchPublishTimes(pnpm, name, timesCache);
-    const someOldEnough = candidates.some((v) => isOldEnough(times.get(v), minutes, now));
-    if (someOldEnough) {
+    if (
+      !shouldBlockOverrideForReleaseAge({
+        name,
+        value: val,
+        minutes,
+        excludeEntries,
+        candidates,
+        publishTimes: times,
+        now,
+      })
+    ) {
       keepItems.push(item);
       continue;
     }
@@ -261,8 +124,7 @@ export async function guardWorkspaceOverrideReleaseAge(
     overridesNode.items = keepItems;
   }
   const next = serializeDoc(doc, current);
-  state.saveWorkspaceYaml(next);
-  state.desiredWorkspaceYaml = next;
+  yaml.writeDesiredWorkspaceYaml(next);
   logger.detail(
     `Dropped ${dropped.length} override(s) blocked by minimumReleaseAge before reinstall.`,
   );

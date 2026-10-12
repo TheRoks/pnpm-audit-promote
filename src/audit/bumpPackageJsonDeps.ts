@@ -2,20 +2,29 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import semver from 'semver';
 import type { Logger } from '../logger';
-import type { WorkspaceState } from '../workspace';
-import type { PnpmRunner } from '../pnpm';
-import { resolveWorkspacePackageDirs } from '../workspace';
+import type { PnpmCaptureRunner } from '../pnpm';
+import {
+  resolveWorkspacePackageDirs,
+  type WorkspacePackageScopeSource,
+} from '../workspace/packageScope';
 import { findWorkspaceFiles } from '../fsWalk';
 import { setJsonProperty } from '../jsonEdit';
 import { selectSafeBump, type BumpTier, normalizeRange } from '../semverUtil';
-import {
-  advisoryAppliesToCurrent,
-  getAvailableVersions,
-  advisoryMatchesIgnoreList,
-} from './parseAdvisories';
+import { advisoryAppliesToCurrent, advisoryMatchesIgnoreList } from './parseAdvisories';
+import { parsePnpmAuditOutput, type PnpmAuditParseResult, type PnpmAuditOutput } from './pnpmAudit';
+import { getAvailableVersions } from './registry';
+export type { PnpmAuditAdvisory, PnpmAuditOutput } from './pnpmAudit';
+
+interface PackageJsonBumpWorkspace extends WorkspacePackageScopeSource {
+  isMultiPackageWorkspace: boolean;
+}
 
 /** Dep field types that can hold concrete package versions. */
-type DepType = 'dependencies' | 'devDependencies' | 'peerDependencies' | 'optionalDependencies';
+export type DepType =
+  | 'dependencies'
+  | 'devDependencies'
+  | 'peerDependencies'
+  | 'optionalDependencies';
 const DEP_TYPES: DepType[] = [
   'dependencies',
   'devDependencies',
@@ -24,7 +33,7 @@ const DEP_TYPES: DepType[] = [
 ];
 
 /** Parsed result of a version field — prefix (`^`/`~`/``) + bare semver. */
-interface ParsedVersion {
+export interface ParsedVersion {
   prefix: '' | '^' | '~';
   bare: string;
 }
@@ -74,8 +83,10 @@ export interface PackageJsonDepBump {
 export interface DirectDepPkgJsonBumpOptions {
   /** When false, packages requiring a major bump are skipped. Defaults to true. */
   allowMajor?: boolean;
-  /** Pre-fetched `pnpm audit --json` stdout. Avoids a second audit call. */
+  /** Raw pre-fetched audit output for callers that have not parsed it. */
   auditJsonStdout?: string;
+  /** Parsed result for an audit command already consumed by the caller. */
+  auditSnapshot?: PnpmAuditParseResult;
   /**
    * Set of GHSA or CVE identifiers to ignore. Advisories matching any ID in
    * this set are excluded from bump decisions.
@@ -89,19 +100,6 @@ export interface DirectDepPkgJsonBumpOptions {
   minSeverity?: string;
 }
 
-interface PnpmAuditAdvisory {
-  module_name?: string;
-  patched_versions?: string;
-  vulnerable_versions?: string;
-  severity?: string;
-  github_advisory_id?: string;
-  cves?: string[];
-  url?: string;
-}
-interface PnpmAuditOutput {
-  advisories?: Record<string, PnpmAuditAdvisory>;
-}
-
 const SEVERITY_ORDER = ['info', 'low', 'moderate', 'high', 'critical'] as const;
 type AuditSeverity = (typeof SEVERITY_ORDER)[number];
 
@@ -112,142 +110,164 @@ function meetsSeverityThreshold(severity: string, minSeverity: string): boolean 
   return idx >= minIdx;
 }
 
-/**
- * Compute version bumps for direct dependencies declared in workspace
- * `package.json` files that are **not** managed by the pnpm catalog but have
- * a known vulnerability from `pnpm audit --json`.
- *
- * - Skips version fields that use `catalog:`, `workspace:`, `file:`, complex
- *   range expressions, or any protocol URL — only `x.y.z`, `^x.y.z`, and
- *   `~x.y.z` are eligible.
- * - Preserves the original tilde/caret prefix in the emitted `after` value.
- * - Respects `allowMajor`: logs a warning and skips when `false`.
- * - Ranged deps (`^`/`~`) are only bumped when the advisory severity is
- *   `high` or `critical`. Exact-pinned deps are bumped for any severity.
- */
-export async function getDirectDepPackageJsonBumps(
-  state: WorkspaceState,
-  pnpm: PnpmRunner,
-  logger: Logger,
-  options: DirectDepPkgJsonBumpOptions = {},
-): Promise<PackageJsonDepBump[]> {
-  const allowMajor = options.allowMajor ?? true;
-  const stdout = options.auditJsonStdout ?? (await pnpm.capture(['audit', '--json'])).stdout;
+export interface DirectDependencyLocation {
+  pkgJsonPath: string;
+  depType: DepType;
+  versionField: string;
+  parsed: ParsedVersion;
+}
 
-  if (!stdout.trim()) return [];
+export interface PackageJsonBumpDiagnostic {
+  level: 'detail' | 'warn';
+  message: string;
+}
 
-  let audit: PnpmAuditOutput;
-  try {
-    audit = JSON.parse(stdout) as PnpmAuditOutput;
-  } catch {
-    logger.warn('Could not parse audit JSON. Skipping package.json direct-dep bump.');
-    return [];
-  }
-  if (!audit.advisories) return [];
+export interface PackageJsonBumpPlan {
+  bumps: PackageJsonDepBump[];
+  diagnostics: PackageJsonBumpDiagnostic[];
+}
 
-  // Collect all workspace package.json paths.
-  const pkgJsonPaths = collectPackageJsonPaths(state);
-
-  // Build lookup: module name → list of locations where it appears as a direct dep.
-  const depIndex = buildDepIndex(pkgJsonPaths);
-
-  if (depIndex.size === 0) return [];
-
-  // Pre-fetch versions for affected modules in parallel.
-  const affectedModules = [
-    ...new Set(
-      Object.values(audit.advisories)
-        .map((adv) => adv.module_name ?? '')
-        .filter((m) => depIndex.has(m)),
-    ),
-  ];
-  const versionCache = new Map<string, string[]>();
-  await Promise.all(affectedModules.map((m) => getAvailableVersions(pnpm, m, versionCache)));
-
+/** Pure package.json bump policy over audit, manifest, and registry snapshots. */
+export function planPackageJsonBumps(input: {
+  audit: PnpmAuditOutput;
+  dependencies: ReadonlyMap<string, readonly DirectDependencyLocation[]>;
+  availableVersions: ReadonlyMap<string, readonly string[]>;
+  allowMajor?: boolean;
+  ignoredAdvisoryIds?: ReadonlySet<string>;
+  minSeverity?: string;
+}): PackageJsonBumpPlan {
+  const allowMajor = input.allowMajor ?? true;
+  const diagnostics: PackageJsonBumpDiagnostic[] = [];
+  const detail = (message: string): void => {
+    diagnostics.push({ level: 'detail', message });
+  };
+  const warn = (message: string): void => {
+    diagnostics.push({ level: 'warn', message });
+  };
   const bumps: PackageJsonDepBump[] = [];
 
-  for (const adv of Object.values(audit.advisories)) {
-    const module = adv.module_name ?? '';
-    const locations = depIndex.get(module);
+  for (const advisory of Object.values(input.audit.advisories ?? {})) {
+    const module = advisory.module_name ?? '';
+    const locations = input.dependencies.get(module);
     if (!locations) continue;
 
-    const patchedRange = adv.patched_versions ?? '';
+    const patchedRange = advisory.patched_versions ?? '';
     if (!patchedRange || !normalizeRange(patchedRange)) continue;
-
-    if (options.ignoredAdvisoryIds && advisoryMatchesIgnoreList(adv, options.ignoredAdvisoryIds)) {
-      logger.detail(`Skipped ignored advisory for ${module}.`);
+    if (input.ignoredAdvisoryIds && advisoryMatchesIgnoreList(advisory, input.ignoredAdvisoryIds)) {
+      detail(`Skipped ignored advisory for ${module}.`);
       continue;
     }
 
-    const available = await getAvailableVersions(pnpm, module, versionCache);
-
-    for (const loc of locations) {
-      const parsed = loc.parsed;
-
+    const available = input.availableVersions.get(module) ?? [];
+    for (const location of locations) {
+      const parsed = location.parsed;
       if (parsed.prefix !== '') {
-        const sev = (adv.severity ?? '').toLowerCase();
-        const effectiveMin = options.minSeverity ?? 'high';
-        if (!meetsSeverityThreshold(sev, effectiveMin)) {
-          logger.detail(
-            `Skipped ranged dep ${module} in ${loc.pkgJsonPath}: severity "${sev || 'unknown'}" is below ${effectiveMin} threshold.`,
+        const severity = (advisory.severity ?? '').toLowerCase();
+        const effectiveMin = input.minSeverity ?? 'high';
+        if (!meetsSeverityThreshold(severity, effectiveMin)) {
+          detail(
+            `Skipped ranged dep ${module} in ${location.pkgJsonPath}: severity "${severity || 'unknown'}" is below ${effectiveMin} threshold.`,
           );
           continue;
         }
       }
 
-      if (!advisoryAppliesToCurrent(parsed.bare, adv.vulnerable_versions)) {
-        logger.detail(
-          `Skipped advisory for ${module} in ${loc.pkgJsonPath}: version ${parsed.bare} is outside vulnerable range ${adv.vulnerable_versions ?? '?'}.`,
+      if (!advisoryAppliesToCurrent(parsed.bare, advisory.vulnerable_versions)) {
+        detail(
+          `Skipped advisory for ${module} in ${location.pkgJsonPath}: version ${parsed.bare} is outside vulnerable range ${advisory.vulnerable_versions ?? '?'}.`,
         );
         continue;
       }
 
       const safe = selectSafeBump(parsed.bare, patchedRange, available);
       if (!safe) {
-        logger.warn(
-          `No non-vulnerable version >= ${parsed.bare} found for ${module} in ${loc.pkgJsonPath} (range: ${patchedRange}).`,
+        warn(
+          `No non-vulnerable version >= ${parsed.bare} found for ${module} in ${location.pkgJsonPath} (range: ${patchedRange}).`,
         );
         continue;
       }
-
       if (safe.tier === 'major' && !allowMajor) {
-        logger.warn(
-          `Skipped ${module} in ${loc.pkgJsonPath}: only a MAJOR bump (${parsed.bare} -> ${safe.version}) satisfies the advisory and --no-allow-major is set.`,
+        warn(
+          `Skipped ${module} in ${location.pkgJsonPath}: only a MAJOR bump (${parsed.bare} -> ${safe.version}) satisfies the advisory and --no-allow-major is set.`,
         );
         continue;
       }
       if (safe.tier === 'major') {
-        logger.warn(
-          `Major version bump required for ${module} in ${loc.pkgJsonPath}: ${parsed.bare} -> ${safe.version}. Review changelog for breaking changes.`,
+        warn(
+          `Major version bump required for ${module} in ${location.pkgJsonPath}: ${parsed.bare} -> ${safe.version}. Review changelog for breaking changes.`,
         );
       }
 
       bumps.push({
-        pkgJsonPath: loc.pkgJsonPath,
-        depType: loc.depType,
+        pkgJsonPath: location.pkgJsonPath,
+        depType: location.depType,
         name: module,
-        before: loc.versionField,
+        before: location.versionField,
         after: `${parsed.prefix}${safe.version}`,
         tier: safe.tier,
       });
     }
   }
 
-  // Deduplicate: multiple advisories can affect the same dep in the same file.
-  // Keep only the bump to the highest safe version per (pkgJsonPath, depType, name).
   const deduped = new Map<string, PackageJsonDepBump>();
   for (const bump of bumps) {
     const key = `${bump.pkgJsonPath}\0${bump.depType}\0${bump.name}`;
     const existing = deduped.get(key);
     if (!existing) {
       deduped.set(key, bump);
-    } else {
-      const newV = semver.coerce(bump.after)?.version ?? '0.0.0';
-      const oldV = semver.coerce(existing.after)?.version ?? '0.0.0';
-      if (semver.gt(newV, oldV)) deduped.set(key, bump);
+      continue;
     }
+    const newVersion = semver.coerce(bump.after)?.version ?? '0.0.0';
+    const oldVersion = semver.coerce(existing.after)?.version ?? '0.0.0';
+    if (semver.gt(newVersion, oldVersion)) deduped.set(key, bump);
   }
-  return [...deduped.values()];
+  return { bumps: [...deduped.values()], diagnostics };
+}
+
+/** Read manifests and registry metadata, run policy, and report its decisions. */
+export async function getDirectDepPackageJsonBumps(
+  workspace: PackageJsonBumpWorkspace,
+  pnpm: PnpmCaptureRunner,
+  logger: Logger,
+  options: DirectDepPkgJsonBumpOptions = {},
+): Promise<PackageJsonDepBump[]> {
+  let snapshot = options.auditSnapshot;
+  if (!snapshot) {
+    const stdout = options.auditJsonStdout ?? (await pnpm.capture(['audit', '--json'])).stdout;
+    snapshot = parsePnpmAuditOutput(stdout);
+  }
+  if (!snapshot.complete) {
+    if (snapshot.reason === 'invalid-json') {
+      logger.warn('Could not parse audit JSON. Skipping package.json direct-dep bump.');
+    }
+    return [];
+  }
+  const audit: PnpmAuditOutput = snapshot.audit;
+
+  const dependencies = buildDepIndex(collectPackageJsonPaths(workspace));
+  if (dependencies.size === 0) return [];
+  const affectedModules = [
+    ...new Set(
+      Object.values(audit.advisories)
+        .map((advisory) => advisory.module_name ?? '')
+        .filter((name) => dependencies.has(name)),
+    ),
+  ];
+  const versionCache = new Map<string, string[]>();
+  await Promise.all(affectedModules.map((name) => getAvailableVersions(pnpm, name, versionCache)));
+
+  const plan = planPackageJsonBumps({
+    audit,
+    dependencies,
+    availableVersions: versionCache,
+    allowMajor: options.allowMajor,
+    ignoredAdvisoryIds: options.ignoredAdvisoryIds,
+    minSeverity: options.minSeverity,
+  });
+  for (const diagnostic of plan.diagnostics) {
+    logger[diagnostic.level](diagnostic.message);
+  }
+  return plan.bumps;
 }
 
 /**
@@ -287,28 +307,21 @@ export function applyPackageJsonDepBumps(bumps: PackageJsonDepBump[], dryRun: bo
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-interface DepLocation {
-  pkgJsonPath: string;
-  depType: DepType;
-  versionField: string;
-  parsed: ParsedVersion;
-}
-
-function collectPackageJsonPaths(state: WorkspaceState): string[] {
-  if (!state.isMultiPackageWorkspace) {
+function collectPackageJsonPaths(workspace: PackageJsonBumpWorkspace): string[] {
+  if (!workspace.isMultiPackageWorkspace) {
     // Single-package mode: confine the audit-driven scan to the workspace
     // root. `WorkspaceState.initialize` guarantees the root package.json
     // exists when we get here.
-    return [state.rootPackageJson];
+    return [workspace.rootPackageJson];
   }
-  const packageDirs = resolveWorkspacePackageDirs(state);
-  return findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
+  const packageDirs = resolveWorkspacePackageDirs(workspace);
+  return findWorkspaceFiles(workspace.workspaceRoot, 'package.json').filter(
     (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
   );
 }
 
-function buildDepIndex(pkgJsonPaths: string[]): Map<string, DepLocation[]> {
-  const index = new Map<string, DepLocation[]>();
+function buildDepIndex(pkgJsonPaths: string[]): Map<string, DirectDependencyLocation[]> {
+  const index = new Map<string, DirectDependencyLocation[]>();
 
   for (const pkgJsonPath of pkgJsonPaths) {
     let raw: string;
@@ -335,7 +348,7 @@ function buildDepIndex(pkgJsonPaths: string[]): Map<string, DepLocation[]> {
         const parsed = extractVersionPrefix(versionField);
         if (!parsed) continue;
 
-        const loc: DepLocation = { pkgJsonPath, depType, versionField, parsed };
+        const loc: DirectDependencyLocation = { pkgJsonPath, depType, versionField, parsed };
         const existing = index.get(name);
         if (existing) {
           existing.push(loc);

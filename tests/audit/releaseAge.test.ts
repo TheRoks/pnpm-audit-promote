@@ -117,7 +117,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
       { version: '11.1.2' },
     );
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([
       { key: 'axios', name: 'axios', value: '1.7.4', minimumReleaseAgeMinutes: MINUTES },
@@ -134,7 +136,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
       { version: '11.1.2' },
     );
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([]);
     expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain(
@@ -151,7 +155,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
       { version: '11.1.2' },
     );
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([]);
     // Excluded packages must not even incur a registry lookup.
@@ -168,7 +174,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
       { version: '11.1.2' },
     );
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([
       { key: 'vite', name: 'vite', value: '>=7.0.0', minimumReleaseAgeMinutes: MINUTES },
@@ -185,7 +193,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
       { version: '11.1.2' },
     );
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([]);
   });
@@ -194,7 +204,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
     const ws = initWorkspace(`minimumReleaseAge: ${MINUTES}\noverrides:\n  axios: 1.7.4\n`);
     const { runner } = makeRecordingRunner({}, { version: '11.1.2' });
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([]);
   });
@@ -203,7 +215,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
     const ws = initWorkspace('overrides:\n  axios: 1.7.4\n');
     const { runner, calls } = makeRecordingRunner({}, { version: '11.1.2' });
 
-    const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
+    const dropped = await guardWorkspaceOverrideReleaseAge(ws.yaml, runner, silentLogger, {
+      now: NOW,
+    });
 
     expect(dropped).toEqual([]);
     expect(calls).toEqual([]);

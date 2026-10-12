@@ -3,14 +3,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { silentLogger } from '../src/logger';
+import { WorkspaceState } from '../src/workspace';
 import {
-  WorkspaceState,
   detectWorkspacePnpmMajor,
-  resolveWorkspacePackageDirs,
   readAuditIgnoreList,
   readAuditLevel,
   readAutoDedupe,
-} from '../src/workspace';
+} from '../src/workspace/pnpmConfig';
+import { resolveWorkspacePackageDirs } from '../src/workspace/packageScope';
 import { WorkspaceReadError } from '../src/errors';
 
 let tmp: string;

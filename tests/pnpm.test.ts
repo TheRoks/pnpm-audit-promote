@@ -118,7 +118,7 @@ describe('createPnpmRunner output gating', () => {
     );
   });
 
-  it('REQ-LOGGING-004: inherits pnpm output when inheritOutput is enabled', async () => {
+  it('REQ-LOGGING-004, REQ-RUNNER-011: forwards and captures pnpm output when inheritOutput is enabled', async () => {
     mockExit(0);
     const runner = createPnpmRunner({
       cwd: TEST_CWD,
@@ -132,6 +132,23 @@ describe('createPnpmRunner output gating', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       EXPLICIT_PNPM_PATH,
       ['install'],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+  });
+
+  it('REQ-RUNNER-011: runs build approval with the terminal attached', async () => {
+    mockExit(0);
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await runner.runInteractive?.(['approve-builds']);
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      EXPLICIT_PNPM_PATH,
+      ['approve-builds'],
       expect.objectContaining({ stdio: 'inherit' }),
     );
   });
@@ -363,6 +380,76 @@ describe('createPnpmRunner output gating', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(/pnpm install failed with exit code 1; retrying/),
     );
+  });
+
+  it('REQ-RUNNER-009, REQ-RUNNER-011: does not retry installs blocked by build approval', async () => {
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('ERR_PNPM_IGNORED_BUILDS', 'utf8'));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+    const warn = vi.fn();
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: { ...makeLogger(), warn },
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await expect(runner.run(['install'])).rejects.toThrow('ERR_PNPM_IGNORED_BUILDS');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('REQ-RUNNER-011: detects ignored builds in verbose output', async () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('ERR_PNPM_IGNORED_BUILDS', 'utf8'));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      inheritOutput: true,
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await expect(runner.run(['install'])).rejects.toThrow('ERR_PNPM_IGNORED_BUILDS');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(Buffer.from('ERR_PNPM_IGNORED_BUILDS', 'utf8'));
+  });
+
+  it('REQ-RUNNER-008, REQ-RUNNER-011: retains an ignored-build error after long install output', async () => {
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.alloc(65_000, 'x'));
+        child.stderr.emit('data', Buffer.from('ERR_PNPM_IGNORED_BUILDS', 'utf8'));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+    const runner = createPnpmRunner({
+      cwd: TEST_CWD,
+      logger: makeLogger(),
+      pnpmPath: EXPLICIT_PNPM_PATH,
+    });
+
+    await expect(runner.run(['install'])).rejects.toThrow('ERR_PNPM_IGNORED_BUILDS');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it('REQ-RUNNER-003: returns non-zero from runAllowFail', async () => {

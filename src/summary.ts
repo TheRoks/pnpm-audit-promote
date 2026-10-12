@@ -8,6 +8,7 @@ export type {
   CatalogChange,
   OverrideChange,
   PackageJsonDepChange,
+  ReleaseAgeBlockedOverride,
   RunSummaryData,
   Severity,
 } from './summary/types';

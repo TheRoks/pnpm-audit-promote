@@ -65,10 +65,13 @@ export class PnpmCommandFailedError extends Error {
     public readonly args: readonly string[],
     public readonly exitCode: number,
     stderr = '',
+    guidance = '',
   ) {
     const trimmed = stderr.trim();
     const suffix = trimmed ? `\n--- pnpm stderr ---\n${trimmed}\n--- end pnpm stderr ---` : '';
-    super(`pnpm ${args.join(' ')} failed with exit code ${exitCode}${suffix}`);
+    super(
+      `pnpm ${args.join(' ')} failed with exit code ${exitCode}${suffix}${guidance ? `\n${guidance}` : ''}`,
+    );
     this.name = 'PnpmCommandFailedError';
     this.stderr = trimmed;
   }

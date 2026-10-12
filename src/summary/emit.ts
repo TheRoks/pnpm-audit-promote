@@ -1,16 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../logger';
-import type { PnpmRunner } from '../pnpm';
+import type { PnpmCaptureRunner } from '../pnpm';
 import type { WorkspaceState } from '../workspace';
-import {
-  extractAdvisoriesWithStatus,
-  readAllOverrides,
-  readCatalogSnapshot,
-  safeReadFile,
-} from './collect';
+import { extractAdvisoriesWithStatus, readCatalogSnapshot, safeReadFile } from './collect';
+import { readAllOverrides } from '../workspaceOverrides';
 import { renderTerminalSummary } from './render';
-import type { AdvisorySummary, AuditStatus, PackageJsonDepChange, RunSummaryData } from './types';
+import type {
+  AdvisorySummary,
+  AuditStatus,
+  PackageJsonDepChange,
+  ReleaseAgeBlockedOverride,
+  RunSummaryData,
+} from './types';
 
 /**
  * Inputs needed to assemble a {@link RunSummaryData} after the orchestrator
@@ -18,7 +20,7 @@ import type { AdvisorySummary, AuditStatus, PackageJsonDepChange, RunSummaryData
  */
 export interface CollectRunSummaryArgs {
   state: WorkspaceState;
-  pnpm: PnpmRunner;
+  pnpm: PnpmCaptureRunner;
   skipAudit: boolean;
   dryRun: boolean;
   durationMs: number;
@@ -29,6 +31,8 @@ export interface CollectRunSummaryArgs {
   initialAdvisories: readonly AdvisorySummary[];
   /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
   pkgJsonDepChanges: readonly PackageJsonDepChange[];
+  /** Audit fixes dropped by the configured minimumReleaseAge gate. */
+  releaseAgeBlockedOverrides?: readonly ReleaseAgeBlockedOverride[];
 }
 
 /**
@@ -39,7 +43,8 @@ export interface CollectRunSummaryArgs {
 export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<RunSummaryData> {
   const { state, pnpm, skipAudit, dryRun } = args;
 
-  const finalYaml = state.desiredWorkspaceYaml || (dryRun ? '' : state.readWorkspaceYaml());
+  const finalYaml =
+    state.yaml.desiredWorkspaceYaml || (dryRun ? '' : state.yaml.readWorkspaceYaml());
   const finalPjText = safeReadFile(state.rootPackageJson);
   const finalCatalog = readCatalogSnapshot(finalYaml);
   const finalOverrides = readAllOverrides(finalYaml, finalPjText);
@@ -74,6 +79,7 @@ export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<Ru
     initialAdvisories: args.initialAdvisories,
     finalAdvisories,
     pkgJsonDepChanges: args.pkgJsonDepChanges,
+    releaseAgeBlockedOverrides: args.releaseAgeBlockedOverrides ?? [],
   };
 }
 

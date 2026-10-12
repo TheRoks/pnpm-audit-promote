@@ -46,6 +46,14 @@ export interface OverrideChange {
   kind: 'added' | 'modified' | 'removed';
 }
 
+/** An audit fix excluded because it violates the configured release-age gate. */
+export interface ReleaseAgeBlockedOverride {
+  selector: string;
+  name: string;
+  value: string;
+  minimumReleaseAgeMinutes: number;
+}
+
 export interface RunSummaryData {
   workspaceRoot: string;
   workspaceName?: string;
@@ -68,6 +76,8 @@ export interface RunSummaryData {
   finalAdvisories: readonly AdvisorySummary[];
   /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
   pkgJsonDepChanges: readonly PackageJsonDepChange[];
+  /** Audit fixes dropped by `minimumReleaseAge`; absent on legacy summaries. */
+  releaseAgeBlockedOverrides?: readonly ReleaseAgeBlockedOverride[];
 }
 
 export const SEVERITY_RANK: Record<Severity, number> = {

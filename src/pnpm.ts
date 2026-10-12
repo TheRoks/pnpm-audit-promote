@@ -3,13 +3,21 @@ import * as path from 'node:path';
 import { type Logger } from './logger';
 import { PnpmCommandFailedError, PnpmNotInstalledError } from './errors';
 
-export interface PnpmRunner {
+export interface PnpmCommandRunner {
   /** Run pnpm and throw on non-zero exit. */
   run(args: string[]): Promise<void>;
-  /** Run pnpm and return its captured stdout. Does not throw on non-zero. */
-  capture(args: string[]): Promise<{ stdout: string; exitCode: number }>;
+  /** Run an interactive pnpm command with the terminal attached. */
+  runInteractive?(args: string[]): Promise<void>;
   /** Run pnpm without throwing on non-zero exit. */
   runAllowFail(args: string[]): Promise<number>;
+}
+
+export interface PnpmCaptureRunner {
+  /** Run pnpm and return its captured stdout. Does not throw on non-zero. */
+  capture(args: string[]): Promise<{ stdout: string; exitCode: number }>;
+}
+
+export interface PnpmVersionReader {
   /**
    * Return the pnpm version string reported by `pnpm --version` (e.g. `10.33.0`
    * or `11.0.0`). Cached after the first call. Returns an empty string when
@@ -17,6 +25,9 @@ export interface PnpmRunner {
    */
   version(): Promise<string>;
 }
+
+/** Composite runner contract retained for public injection and integrations. */
+export interface PnpmRunner extends PnpmCommandRunner, PnpmCaptureRunner, PnpmVersionReader {}
 
 /**
  * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, `12.0.0`, ...) into its major
@@ -56,10 +67,7 @@ export interface PnpmOptions {
   extraArgs?: readonly string[];
   /** Optional explicit absolute path to the pnpm executable. */
   pnpmPath?: string;
-  /**
-   * Number of automatic retries for `pnpm install` on non-zero exit.
-   * Defaults to 1 to absorb transient registry/network flakiness in CI.
-   */
+  /** Number of retries for transient `pnpm install` failures. Defaults to 1. */
   installRetries?: number;
 }
 
@@ -120,6 +128,7 @@ export function createPnpmRunner({
         if (result.code === 0) {
           return;
         }
+        if (result.stderr.includes('ERR_PNPM_IGNORED_BUILDS')) break;
         if (attempt < maxAttempts) {
           logger.warn(
             `pnpm ${finalArgs.join(' ')} failed with exit code ${result.code}; retrying (${attempt}/${maxAttempts - 1}).`,
@@ -127,6 +136,18 @@ export function createPnpmRunner({
         }
       }
       throw new PnpmCommandFailedError(finalArgs, lastCode, lastStderr);
+    },
+    async runInteractive(args) {
+      const finalArgs = withExtras(args);
+      logger.trace?.(`pnpm ${finalArgs.join(' ')}`);
+      const result = await spawnPnpm(executable, finalArgs, {
+        cwd,
+        inheritOutput: true,
+        interactive: true,
+      });
+      if (result.code !== 0) {
+        throw new PnpmCommandFailedError(finalArgs, result.code, result.stderr);
+      }
     },
     async runAllowFail(args) {
       const finalArgs = withExtras(args);
@@ -292,26 +313,23 @@ function isInstallCommand(args: readonly string[]): boolean {
 function spawnPnpm(
   executable: string,
   args: string[],
-  opts: { cwd: string; inheritOutput: boolean },
+  opts: { cwd: string; inheritOutput: boolean; interactive?: boolean },
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
-    // When inheriting, output goes straight to the parent terminal and we
-    // cannot capture it. Otherwise, pipe both stdout and stderr so failures
-    // can be reported with the actual pnpm error text instead of an opaque
-    // exit code (pnpm frequently emits ERR_PNPM_* messages on stdout).
+    // Keep interactive commands attached to the terminal. Other commands
+    // capture diagnostics even in verbose mode while forwarding raw output.
     const child = spawn(executable, args, {
       cwd: opts.cwd,
-      stdio: opts.inheritOutput ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+      stdio: opts.interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
     });
     let captured = '';
-    const append = (chunk: Buffer): void => {
-      if (captured.length < 64_000) {
-        captured += chunk.toString('utf8');
-      }
+    const append = (chunk: Buffer, output: NodeJS.WriteStream): void => {
+      captured = (captured + chunk.toString('utf8')).slice(-64_000);
+      if (opts.inheritOutput) output.write(chunk);
     };
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
+    child.stdout?.on('data', (chunk: Buffer) => append(chunk, process.stdout));
+    child.stderr?.on('data', (chunk: Buffer) => append(chunk, process.stderr));
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         reject(new PnpmNotInstalledError());

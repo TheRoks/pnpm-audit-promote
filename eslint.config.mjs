@@ -32,6 +32,42 @@ export default tseslint.config(
     },
   },
   {
+    files: ['src/audit/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['../summary', '../summary/**'],
+              message: 'Audit policy must not depend on summary collection or presentation.',
+            },
+            {
+              group: ['../refresh', '../refresh/**'],
+              message: 'Audit policy must not depend on refresh orchestration.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/catalog.ts', 'src/workspaceYaml.ts', 'src/semverUtil.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['./refresh', './refresh/**'],
+              message: 'Domain and document utilities must not depend on refresh orchestration.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['tests/**/*.ts', 'scripts/**/*'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

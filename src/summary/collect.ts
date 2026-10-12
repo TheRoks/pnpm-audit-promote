@@ -4,8 +4,14 @@
  * overrides. Pure functions only — no rendering, no logging.
  */
 import * as fs from 'node:fs';
+export {
+  readAllOverrides,
+  readPackageJsonOverrides,
+  readWorkspaceOverrides,
+} from '../workspaceOverrides';
 import semver from 'semver';
 import { getCatalogVersions } from '../catalog';
+import { parsePnpmAuditOutput, type PnpmAuditOutput } from '../audit/pnpmAudit';
 import {
   SEVERITY_RANK,
   type AdvisorySummary,
@@ -41,40 +47,32 @@ export function extractAdvisories(jsonStdout: string): AdvisorySummary[] {
  * `advisories` object; malformed and error-shaped payloads are incomplete.
  */
 export function extractAdvisoriesWithStatus(jsonStdout: string): AuditAdvisoryExtraction {
-  if (!jsonStdout.trim()) return { complete: false, advisories: [] };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonStdout);
-  } catch {
-    return { complete: false, advisories: [] };
-  }
-  if (!parsed || typeof parsed !== 'object') return { complete: false, advisories: [] };
-  const advisories = (parsed as { advisories?: Record<string, unknown> }).advisories;
-  if (!advisories || typeof advisories !== 'object' || Array.isArray(advisories)) {
+  const parsed = parsePnpmAuditOutput(jsonStdout);
+  if (!parsed.complete) {
     return { complete: false, advisories: [] };
   }
 
+  return { complete: true, advisories: summarizeAuditAdvisories(parsed.audit) };
+}
+
+/** Convert the shared pnpm audit model into the summary's presentation rows. */
+export function summarizeAuditAdvisories(audit: PnpmAuditOutput): AdvisorySummary[] {
   const out: AdvisorySummary[] = [];
-  for (const [id, entry] of Object.entries(advisories)) {
-    if (!entry || typeof entry !== 'object') continue;
-    const a = entry as Record<string, unknown>;
-    const sevRaw = typeof a['severity'] === 'string' ? a['severity'].toLowerCase() : 'unknown';
+  for (const [id, advisory] of Object.entries(audit.advisories)) {
+    const sevRaw = advisory.severity?.toLowerCase() ?? 'unknown';
     const severity: Severity = (PNPM_AUDIT_SEVERITIES as Set<string>).has(sevRaw)
       ? (sevRaw as Severity)
       : 'unknown';
-    const cves = Array.isArray(a['cves'])
-      ? a['cves'].filter((c): c is string => typeof c === 'string')
-      : [];
     out.push({
       id,
-      module: typeof a['module_name'] === 'string' ? a['module_name'] : '',
+      module: advisory.module_name ?? '',
       severity,
-      title: typeof a['title'] === 'string' ? a['title'] : '',
-      url: typeof a['url'] === 'string' ? a['url'] : undefined,
-      cves,
+      title: advisory.title ?? '',
+      url: advisory.url,
+      cves: advisory.cves ?? [],
     });
   }
-  return { complete: true, advisories: out };
+  return out;
 }
 
 export function bumpTier(before: string, after: string): CatalogChange['bump'] {
@@ -154,67 +152,9 @@ export function diffAdvisories(
   };
 }
 
-/**
- * Read the `overrides:` block from a workspace yaml string and return a
- * `selector -> value` map.
- */
-export function readWorkspaceOverrides(yaml: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const blockRe = /^(overrides:[ \t]*\r?\n((?:[ \t]+\S.*\r?\n?)+))/m;
-  const m = blockRe.exec(yaml);
-  if (!m) return out;
-  const body = m[2] ?? '';
-  const entryRe =
-    /^\s+(?:'([^']+)'|"([^"]+)"|([^'"\r\n]+?))\s*:\s*(?:'([^']*)'|"([^"]*)"|([^\s]+))\s*$/;
-  for (const line of body.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const em = entryRe.exec(line);
-    if (!em) continue;
-    const key = em[1] ?? em[2] ?? em[3] ?? '';
-    const val = em[4] ?? em[5] ?? em[6] ?? '';
-    if (key) out.set(key, val);
-  }
-  return out;
-}
-
-/** Read `pnpm.overrides` from a package.json text. Tolerant of malformed input. */
-export function readPackageJsonOverrides(jsonText: string): Map<string, string> {
-  const out = new Map<string, string>();
-  try {
-    const parsed = JSON.parse(jsonText) as { pnpm?: { overrides?: Record<string, unknown> } };
-    const overrides = parsed?.pnpm?.overrides;
-    if (overrides && typeof overrides === 'object') {
-      for (const [k, v] of Object.entries(overrides)) {
-        if (typeof v === 'string') out.set(k, v);
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return out;
-}
-
 /** Convenience: catalog snapshot from yaml text, only entries with concrete versions. */
 export function readCatalogSnapshot(yaml: string): Map<string, string> {
   return new Map(getCatalogVersions(yaml));
-}
-
-/** Combine workspace + package.json overrides into one selector-keyed map. */
-export function readAllOverrides(
-  workspaceYaml: string,
-  rootPackageJsonText: string | null,
-): Map<string, { value: string; source: 'workspace' | 'package.json' }> {
-  const out = new Map<string, { value: string; source: 'workspace' | 'package.json' }>();
-  for (const [k, v] of readWorkspaceOverrides(workspaceYaml)) {
-    out.set(k, { value: v, source: 'workspace' });
-  }
-  if (rootPackageJsonText) {
-    for (const [k, v] of readPackageJsonOverrides(rootPackageJsonText)) {
-      // package.json takes precedence in display when keys collide.
-      out.set(k, { value: v, source: 'package.json' });
-    }
-  }
-  return out;
 }
 
 /** Read a file, returning null on any error. */

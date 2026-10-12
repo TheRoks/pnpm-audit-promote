@@ -40,7 +40,11 @@ describe('getDirectDepCatalogBumps', () => {
       'view @nx/azure-cache versions --json': JSON.stringify(['5.0.7', '21.0.0-beta.0']),
     });
 
-    const result = await getDirectDepCatalogBumps(state, runner, silentLogger);
+    const result = await getDirectDepCatalogBumps(
+      state.yaml.desiredWorkspaceYaml,
+      runner,
+      silentLogger,
+    );
 
     expect(result.bumps).toEqual(new Map());
     expect(result.tiers).toEqual(new Map());

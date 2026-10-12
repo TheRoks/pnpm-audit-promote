@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import { parseDocument } from 'yaml';
 import type { Logger } from '../logger';
-import type { WorkspaceState } from '../workspace';
-import { readWorkspaceOverrides } from '../summary/collect';
+import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
+import { readWorkspaceOverrides } from '../workspaceOverrides';
 import { setJsonProperty } from '../jsonEdit';
 
 /**
@@ -27,16 +27,25 @@ import { setJsonProperty } from '../jsonEdit';
  *   an empty `originalWorkspaceYaml`) and has no other top-level keys
  *   left, the yaml file is deleted and `hasWorkspaceYaml` is cleared so
  *   subsequent steps treat the workspace as single-package again.
- * - Respects `state.dryRun`: never writes when set.
+ * - Respects the YAML snapshot's dry-run setting: never writes when set.
  */
-export function migrateYamlOverridesToPackageJson(state: WorkspaceState, logger: Logger): boolean {
-  if (!state.hasWorkspaceYaml) return false;
+export interface OverrideMigrationWorkspace {
+  rootPackageJson: string;
+  yaml: WorkspaceYamlSnapshot;
+}
 
-  const yamlText = state.readWorkspaceYaml();
+export function migrateYamlOverridesToPackageJson(
+  workspace: OverrideMigrationWorkspace,
+  logger: Logger,
+): boolean {
+  const { yaml } = workspace;
+  if (!yaml.hasWorkspaceYaml) return false;
+
+  const yamlText = yaml.readWorkspaceYaml();
   const yamlOverrides = readWorkspaceOverrides(yamlText);
   if (yamlOverrides.size === 0) return false;
 
-  const pjPath = state.rootPackageJson;
+  const pjPath = workspace.rootPackageJson;
   if (!fs.existsSync(pjPath)) return false;
 
   const pjText = fs.readFileSync(pjPath, 'utf8');
@@ -74,9 +83,9 @@ export function migrateYamlOverridesToPackageJson(state: WorkspaceState, logger:
   if (newYaml.trim() === '{}') newYaml = '';
 
   const yamlBecameEmpty = newYaml.trim() === '';
-  const yamlWasCreatedMidRun = state.originalWorkspaceYaml === '';
+  const yamlWasCreatedMidRun = yaml.originalWorkspaceYaml === '';
 
-  if (state.dryRun) {
+  if (yaml.dryRun) {
     logger.detail(
       `Dry-run: would move ${yamlOverrides.size} override(s) from pnpm-workspace.yaml into package.json (pnpm.overrides).`,
     );
@@ -86,18 +95,9 @@ export function migrateYamlOverridesToPackageJson(state: WorkspaceState, logger:
   fs.writeFileSync(pjPath, newPj, 'utf8');
 
   if (yamlBecameEmpty && yamlWasCreatedMidRun) {
-    try {
-      fs.unlinkSync(state.workspaceYaml);
-    } catch {
-      // best-effort: a write below will handle the residual content
-    }
-    state.hasWorkspaceYaml = false;
-    state.desiredWorkspaceYaml = '';
+    yaml.removeWorkspaceYaml();
   } else {
-    state.desiredWorkspaceYaml = newYaml;
-    if (state.hasWorkspaceYaml) {
-      fs.writeFileSync(state.workspaceYaml, newYaml, 'utf8');
-    }
+    yaml.writeDesiredWorkspaceYaml(newYaml);
   }
 
   logger.detail(

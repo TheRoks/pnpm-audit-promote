@@ -65,6 +65,12 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-CORE-010** — After a pnpm command creates `pnpm-workspace.yaml`,
   `refreshDeps` SHALL capture the new file as the desired workspace snapshot
   before later workspace manipulation.
+- **REQ-CORE-011** — When an install fails with `ERR_PNPM_IGNORED_BUILDS`,
+  `refreshDeps` SHALL run pnpm's interactive `approve-builds` command when a
+  terminal is available, preserve only its recorded build decisions in the
+  desired workspace snapshot, and retry that install once. Without a terminal
+  or an interactive runner, it SHALL fail with instructions for resolving the
+  approval in the target workspace. `--force` SHALL NOT decide build approvals.
 
 ## WORKSPACE — root detection and scope
 
@@ -145,7 +151,8 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   promote qualified `pnpm.overrides` entries from `package.json` into the
   catalog when the qualifier's range matches the catalog version and the
   computed patched minimum is strictly greater than the current catalog
-  version.
+  version. When the override value is a range, the promoted catalog value
+  SHALL preserve that range instead of pinning its minimum as an exact version.
 - **REQ-OVERRIDES-004** — Plain (unqualified) `pnpm.overrides` entries
   pinning a catalog package SHALL NOT be promoted (they lack the
   vulnerable-range context to do so safely); the count of skipped entries
@@ -168,8 +175,26 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 - **REQ-OVERRIDES-009** — Before post-audit installation, the tool SHALL
   validate semver audit overrides against published stable versions when
   registry versions are available. If none satisfies an override, it SHALL
-  drop that audit-generated override. For catalog-eligible range overrides,
-  it SHALL promote the lowest published stable version satisfying the range.
+  drop that audit-generated override. For qualified range overrides,
+  it SHALL retain a compatible pre-audit range only when it excludes published
+  versions in the vulnerable selector. If the range includes vulnerable
+  published versions, it SHALL raise its floor to the lowest published stable
+  version beyond the vulnerable range. When no compatible pre-audit range is
+  available, it SHALL advance the audit range floor to a published safe version.
+- **REQ-OVERRIDES-010** — Before post-audit installation, when an
+  audit-generated override selects a lower version than a stable version
+  already present in the original lockfile, and the initial audit did not
+  report that locked version as vulnerable, the tool SHALL preserve the
+  higher locked version if it is published and has the same major version.
+- **REQ-OVERRIDES-011** — When pnpm changes an original ranged audit override,
+  validation SHALL restore a compatible original range when it can associate
+  one unambiguously with the selector or package, preserving its original
+  floor only when that floor excludes published vulnerable versions. Otherwise
+  it SHALL raise the original range floor beyond those versions while retaining
+  its range semantics where possible. The lockfile records the version actually
+  resolved. Without a compatible original range, validation SHALL retain range
+  semantics when adjusting an audit range and SHALL NOT turn it into an exact
+  pin unless the audit target itself is exact.
 
 ## AUDIT — direct-dep handling and bump selection
 
@@ -296,6 +321,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   package whose registry publish time is unavailable SHALL be treated as old
   enough (honouring `minimumReleaseAgeIgnoreMissingTime`). The check SHALL be
   skippable via `--no-release-age-check` for offline runs.
+- **REQ-PNPM11-013** — Each audit override dropped by the release-age check
+  SHALL be included in the run summary with its selector, proposed value, and
+  configured `minimumReleaseAge`, so users can see which fix was blocked.
 
 ## PNPM12 — pnpm 12 specific behavior
 
@@ -445,10 +473,9 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
 ## PNPM-RUNNER — runner abstraction
 
 - **REQ-RUNNER-001** — `createPnpmRunner` SHALL spawn pnpm via
-  `cross-spawn`. When `inheritOutput` is true, child stdio SHALL be
-  inherited so pnpm writes directly to the parent terminal; otherwise
-  child stdio SHALL be `['ignore', 'pipe', 'pipe']` so stdout and stderr
-  can be captured for diagnostic reporting (REQ-RUNNER-008).
+  `cross-spawn`. Normal commands SHALL pipe stdout and stderr for diagnostic
+  reporting (REQ-RUNNER-008), forwarding both streams to the parent terminal
+  when `inheritOutput` is true. Interactive commands SHALL inherit stdio.
 - **REQ-RUNNER-002** — `PnpmRunner.run` SHALL throw
   `PnpmCommandFailedError` on non-zero exit.
 - **REQ-RUNNER-003** — `PnpmRunner.runAllowFail` SHALL resolve to the
@@ -461,8 +488,8 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   first lookup per runner instance.
 - **REQ-RUNNER-007** — A custom `PnpmRunner` provided via `options.pnpm`
   SHALL be used in place of the default runner (injection point).
-- **REQ-RUNNER-008** — When `inheritOutput` is false, the runner SHALL
-  buffer pnpm's combined stdout and stderr (capped at 64 KB) and, on
+- **REQ-RUNNER-008** — The runner SHALL buffer pnpm's combined stdout and
+  stderr (capped at 64 KB) for normal commands and, on
   non-zero exit from `PnpmRunner.run`, SHALL attach the captured tail to
   the thrown `PnpmCommandFailedError` (see REQ-ERRORS-004). pnpm often
   emits `ERR_PNPM_*` diagnostics on stdout, so both streams are merged.
@@ -470,12 +497,16 @@ IDs are stable: never re-use a deleted ID. Mark obsolete requirements with
   subcommand up to `installRetries` additional times (default `1`, total
   of 2 attempts). Each retry SHALL emit a warning through the injected
   logger. Non-`install` subcommands and `runAllowFail` invocations SHALL
-  NOT be retried.
+  NOT be retried. Installs that fail with `ERR_PNPM_IGNORED_BUILDS` SHALL
+  NOT be retried before an approval decision.
 - **REQ-RUNNER-010** — When the workspace root `package.json` declares a
   `packageManager` or `devEngines.packageManager` field specifying a pnpm
   version, that declared version SHALL be used as the authoritative pnpm
   major version. The version reported by `pnpm --version` on PATH SHALL
   only be used when neither field is present.
+- **REQ-RUNNER-011** — The runner SHALL expose an interactive command path
+  that inherits stdin, stdout, and stderr for `pnpm approve-builds`. Verbose
+  normal commands SHALL still capture error text while forwarding raw output.
 
 ## INVARIANT — idempotency
 

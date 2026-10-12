@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import picomatch from 'picomatch';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, parseDocument } from 'yaml';
 import type { Logger } from './logger';
 import { PRUNED_DIR_NAMES } from './fsWalk';
 import { restoreMinimumReleaseAgeExclude } from './releaseAgeExclude';
@@ -196,6 +196,37 @@ export class WorkspaceState {
     if (updated === this.desiredWorkspaceYaml) return;
     this.desiredWorkspaceYaml = updated;
     logger.detail('Preserved pnpm 12 pruning of stale `audit.ignore` entries.');
+  }
+
+  /**
+   * Carry only the build decisions written by `pnpm approve-builds` into the
+   * desired YAML snapshot. Other pnpm rewrites must still be restored.
+   */
+  preserveApprovedBuilds(logger: Logger): boolean {
+    if (!this.hasWorkspaceYaml) return false;
+    const actual = parseDocument(this.readWorkspaceYaml());
+    const desired = parseDocument(this.desiredWorkspaceYaml);
+    if (actual.errors.length > 0 || desired.errors.length > 0) return false;
+
+    let changed = false;
+    for (const key of [
+      'allowBuilds',
+      'permissions',
+      'onlyBuiltDependencies',
+      'ignoredBuiltDependencies',
+      'neverBuiltDependencies',
+    ]) {
+      const current = actual.get(key);
+      if (JSON.stringify(current) === JSON.stringify(desired.get(key))) continue;
+      if (actual.has(key)) desired.set(key, current);
+      else desired.delete(key);
+      changed = true;
+    }
+    if (!changed) return false;
+    this.desiredWorkspaceYaml = desired.toString().replace(/\n/g, this.yamlEol);
+    this.saveWorkspaceYaml(this.desiredWorkspaceYaml);
+    logger.detail('Preserved build-script decisions recorded by pnpm approve-builds.');
+    return true;
   }
 
   /**

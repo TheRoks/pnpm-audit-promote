@@ -28,6 +28,163 @@ function writeWorkspace(yaml: string, pkgJson?: string): WorkspaceState {
 }
 
 describe('guardWorkspaceOverrideAvailability', () => {
+  it("REQ-OVERRIDES-010: keeps an audited-safe locked version above pnpm audit's patched minimum", async () => {
+    const state = writeWorkspace('overrides:\n  pdfjs-dist@<=4.1.392: 4.2.67\n');
+    const { runner } = makeRecordingRunner({
+      'view pdfjs-dist versions --json': JSON.stringify(['4.2.67', '4.10.38']),
+    });
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map([['pdfjs-dist', '4.10.38']]),
+    );
+
+    expect(state.readWorkspaceYaml()).toContain('pdfjs-dist@<=4.1.392: 4.10.38');
+  });
+
+  it('REQ-OVERRIDES-011: preserves caret range semantics when raising an override to a safe version', async () => {
+    const state = writeWorkspace("overrides:\n  transitive: '^1.0.0'\n");
+    const { runner } = makeRecordingRunner({
+      'view transitive versions --json': JSON.stringify(['1.0.0', '1.4.0', '1.4.1']),
+    });
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map([['transitive', '1.4.0']]),
+    );
+
+    expect(state.readWorkspaceYaml()).toContain("transitive: '^1.4.0'");
+  });
+
+  it('REQ-OVERRIDES-011: keeps the original caret floor when audit emits a newer exact override', async () => {
+    const selector = 'fast-xml-parser@<5.7.0';
+    const state = writeWorkspace(`overrides:\n  '${selector}': '5.11.2'\n`);
+    const { runner } = makeRecordingRunner({
+      'view fast-xml-parser versions --json': JSON.stringify(['5.7.0', '5.11.2']),
+    });
+    const originalOverrides = new Map([
+      [selector, { value: '^5.7.0', source: 'workspace' as const }],
+    ]);
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map(),
+      originalOverrides,
+    );
+    expect(state.readWorkspaceYaml()).toContain("'fast-xml-parser@<5.7.0': '^5.7.0'");
+  });
+
+  it('REQ-OVERRIDES-011: raises an original caret floor past published vulnerable versions', async () => {
+    const selector = 'smol-toml@<=1.8.0';
+    const state = writeWorkspace(`overrides:\n  '${selector}': '1.9.0'\n`);
+    const { runner } = makeRecordingRunner({
+      'view smol-toml versions --json': JSON.stringify([
+        '1.7.1',
+        '1.7.2',
+        '1.8.0',
+        '1.9.0',
+        '1.9.1',
+      ]),
+    });
+    const originalOverrides = new Map([
+      [selector, { value: '^1.7.1', source: 'workspace' as const }],
+    ]);
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map(),
+      originalOverrides,
+    );
+
+    expect(state.readWorkspaceYaml()).toContain("'smol-toml@<=1.8.0': '^1.9.0'");
+  });
+
+  it('REQ-OVERRIDES-011: raises an unsafe audit caret even without a matching original override', async () => {
+    const state = writeWorkspace("overrides:\n  'smol-toml@<=1.8.0': '^1.7.1'\n");
+    const { runner } = makeRecordingRunner({
+      'view smol-toml versions --json': JSON.stringify([
+        '1.7.1',
+        '1.7.2',
+        '1.8.0',
+        '1.9.0',
+        '1.9.1',
+      ]),
+    });
+
+    await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
+
+    expect(state.readWorkspaceYaml()).toContain("'smol-toml@<=1.8.0': '^1.9.0'");
+  });
+
+  it('REQ-OVERRIDES-011: preserves comparator ranges when raising an override floor', async () => {
+    const state = writeWorkspace("overrides:\n  transitive: '>=1.0.0 <2.0.0'\n");
+    const { runner } = makeRecordingRunner({
+      'view transitive versions --json': JSON.stringify(['1.0.0', '1.4.0', '1.4.1']),
+    });
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map([['transitive', '1.4.0']]),
+    );
+
+    expect(state.readWorkspaceYaml()).toContain("transitive: '>=1.4.0 <2.0.0'");
+  });
+
+  it('REQ-OVERRIDES-011: drops a raised range when its upper bound excludes every safe version', async () => {
+    const selector = 'pkg@<2.0.0';
+    const value = '>=1.0.0 <2.0.0';
+    const state = writeWorkspace(`overrides:\n  '${selector}': '${value}'\n`);
+    const { runner } = makeRecordingRunner({
+      'view pkg versions --json': JSON.stringify(['1.0.0', '1.9.9', '2.0.0']),
+    });
+    const warnings: string[] = [];
+    const logger = {
+      ...silentLogger,
+      warn(message: string) {
+        warnings.push(message);
+      },
+    };
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      logger,
+      new Map(),
+      new Map([[selector, { value, source: 'workspace' }]]),
+    );
+
+    expect(state.readWorkspaceYaml()).not.toContain('pkg@<2.0.0');
+    expect(warnings).toContain(
+      `Dropping audit override pkg -> ${value}: no safe published version can be represented beyond selector ${selector}.`,
+    );
+  });
+
+  it('REQ-OVERRIDES-011: preserves every alternative in an OR range', async () => {
+    const state = writeWorkspace("overrides:\n  transitive: '^1.0.0 || ^2.0.0'\n");
+    const { runner } = makeRecordingRunner({
+      'view transitive versions --json': JSON.stringify(['1.0.0', '1.4.0', '2.0.0']),
+    });
+
+    await guardWorkspaceOverrideAvailability(
+      state,
+      runner,
+      silentLogger,
+      new Map([['transitive', '1.4.0']]),
+    );
+
+    expect(state.readWorkspaceYaml()).toContain("transitive: '^1.0.0 >=1.4.0 || ^2.0.0 >=1.4.0'");
+  });
+
   it('REQ-OVERRIDES-009: drops catalog and transitive overrides with unpublished targets', async () => {
     const yaml =
       "catalog:\n  '@nx/azure-cache': 5.0.7\n\noverrides:\n  '@nx/azure-cache': 5.0.8\n  '@nx/azure-cache@<=5.0.7': '>=5.0.8'\n  'node-forge@<1.4.1': '^1.4.1'\n";
@@ -55,7 +212,7 @@ describe('guardWorkspaceOverrideAvailability', () => {
     await guardWorkspaceOverrideAvailability(state, runner, silentLogger);
     const promoted = syncAuditOverridesIntoCatalog(state, silentLogger);
 
-    expect(promoted).toContain('vite: 6.4.3');
+    expect(promoted).toMatch(/vite:\s+["']>=6\.4\.3["']/);
     expect(promoted).not.toContain('vite@<=6.4.1');
   });
 });
@@ -138,8 +295,29 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
     );
     const state = writeWorkspace(yaml, pkg);
     const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
-    expect(out).toContain("vite: '6.4.2'");
+    expect(out).toContain("vite: '>=6.4.2'");
 
+    const newPkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
+      pnpm?: { overrides?: Record<string, string> };
+    };
+    expect(newPkg.pnpm?.overrides).toBeUndefined();
+  });
+
+  it('REQ-OVERRIDES-003, REQ-OVERRIDES-011: preserves caret ranges when promoting qualified package.json overrides', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n";
+    const pkg = JSON.stringify(
+      {
+        name: 'root',
+        pnpm: { overrides: { 'vite@<=6.4.1': '^6.4.2' } },
+      },
+      null,
+      2,
+    );
+    const state = writeWorkspace(yaml, pkg);
+
+    const out = syncPackageJsonOverridesIntoCatalog(state, yaml, silentLogger);
+
+    expect(out).toContain("vite: '^6.4.2'");
     const newPkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf8')) as {
       pnpm?: { overrides?: Record<string, string> };
     };
@@ -354,13 +532,23 @@ describe('syncPackageJsonOverridesIntoCatalog', () => {
 describe('syncAuditOverridesIntoCatalog qualified overrides', () => {
   it('REQ-OVERRIDES-001: promotes catalog entry when a qualified override selector matches the catalog version', () => {
     // pnpm audit --fix writes `vite@<=6.4.1: '>=6.4.2'`; catalog is at 6.3.5.
-    // The fix: promote catalog to the concrete minimum (6.4.2) and discard the override.
+    // Promote the range into the catalog and discard the now-dead selector.
     const yaml =
       "packages:\n  - 'apps/*'\n\ncatalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
-    expect(out).toContain("vite: '6.4.2'");
+    expect(out).toContain("vite: '>=6.4.2'");
     expect(out).not.toContain('vite@<=6.4.1');
+    expect(out).not.toContain('overrides:');
+  });
+
+  it('REQ-OVERRIDES-001, REQ-OVERRIDES-011: preserves caret ranges when promoting qualified workspace overrides', () => {
+    const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  'vite@<=6.4.1': '^6.4.2'\n";
+    const state = writeWorkspace(yaml);
+
+    const out = syncAuditOverridesIntoCatalog(state, silentLogger);
+
+    expect(out).toContain("vite: '^6.4.2'");
     expect(out).not.toContain('overrides:');
   });
 
@@ -562,12 +750,12 @@ describe('cross-major warning', () => {
   });
 
   it('REQ-OVERRIDES-007: qualified override is discarded after promotion when catalog version no longer satisfies its selector', () => {
-    // vite@<=6.4.1 is promoted: catalog bumps from 6.3.5 → 6.4.2.
-    // The final catalog 6.4.2 does NOT satisfy <=6.4.1, so the override is discarded.
+    // vite@<=6.4.1 is promoted: catalog range advances from 6.3.5 to >=6.4.2.
+    // Its minimum no longer satisfies <=6.4.1, so the override is discarded.
     const yaml = "catalog:\n  vite: '6.3.5'\n\noverrides:\n  vite@<=6.4.1: '>=6.4.2'\n";
     const state = writeWorkspace(yaml);
     const out = syncAuditOverridesIntoCatalog(state, silentLogger);
-    expect(out).toContain("vite: '6.4.2'");
+    expect(out).toContain("vite: '>=6.4.2'");
     expect(out).not.toContain('vite@<=6.4.1');
     expect(out).not.toContain('overrides:');
   });

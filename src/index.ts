@@ -4,6 +4,7 @@ export type {
   AuditStatus,
   CatalogChange,
   OverrideChange,
+  ReleaseAgeBlockedOverride,
   RunSummaryData,
   Severity,
 } from './summary/types';

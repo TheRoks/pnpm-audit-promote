@@ -24,6 +24,11 @@ export async function guardWorkspaceOverrideAvailability(
   state: WorkspaceState,
   pnpm: PnpmRunner,
   logger: Logger,
+  baselineSafeVersions: ReadonlyMap<string, string> = new Map(),
+  originalOverrides: ReadonlyMap<
+    string,
+    { value: string; source: 'workspace' | 'package.json' }
+  > = new Map(),
 ): Promise<void> {
   if (!state.hasWorkspaceYaml) return;
   const current = state.readWorkspaceYaml();
@@ -70,8 +75,9 @@ export async function guardWorkspaceOverrideAvailability(
   let changed = false;
   for (const item of overridesNode.items) {
     const target = eligible.get(item);
+    const key = isScalar(item.key) ? String(item.key.value) : null;
     const value = isScalar(item.value) ? String(item.value.value) : null;
-    if (!target || value === null) {
+    if (!target || key === null || value === null) {
       keepItems.push(item);
       continue;
     }
@@ -99,11 +105,56 @@ export async function guardWorkspaceOverrideAvailability(
       continue;
     }
 
-    if (catalogPromotionEligible && selected !== value && isScalar(item.value)) {
-      item.value.value = selected;
+    const baseline = baselineSafeVersions.get(name);
+    const preferred =
+      baseline &&
+      semver.valid(baseline) &&
+      semver.major(baseline) === semver.major(selected) &&
+      semver.gt(baseline, selected) &&
+      available.includes(baseline) &&
+      (semver.valid(value) || semver.satisfies(baseline, normalizeRange(value) ?? value))
+        ? baseline
+        : selected;
+    // pnpm can rewrite the user's ranged override, often to an exact value
+    // when the workspace has `savePrefix: ''`. Keep the original range only
+    // when it excludes published versions in the vulnerable selector. If its
+    // floor is too low, raise it to the first published stable version above
+    // the vulnerable range; the lockfile records the version actually resolved.
+    const originalRange = findCompatibleOriginalOverrideRange(
+      name,
+      key,
+      preferred,
+      originalOverrides,
+    );
+    const vulnerableRange = getQualifiedSelectorRange(name, key);
+    const sourceValue = originalRange ?? value;
+    const raisedValue = vulnerableRange
+      ? raiseOverrideFloorPastVulnerableVersions(sourceValue, vulnerableRange, available)
+      : undefined;
+    const preferredValue =
+      raisedValue ?? originalRange ?? formatPreferredOverrideValue(value, preferred);
+    if (
+      vulnerableRange &&
+      hasPublishedVulnerableMatch(preferredValue, vulnerableRange, available)
+    ) {
+      changed = true;
+      logger.warn(
+        `Dropping audit override ${name} -> ${preferredValue}: no safe published version can be represented beyond selector ${key}.`,
+      );
+      continue;
+    }
+    if (
+      (catalogPromotionEligible ||
+        preferred !== selected ||
+        originalRange !== undefined ||
+        raisedValue !== undefined) &&
+      preferredValue !== value &&
+      isScalar(item.value)
+    ) {
+      item.value.value = preferredValue;
       changed = true;
       logger.detail(
-        `Adjusted audit override ${name} -> ${value} to published version ${selected}.`,
+        `Adjusted audit override ${name} -> ${value} to published specifier ${preferredValue}.`,
       );
     }
     keepItems.push(item);
@@ -118,6 +169,136 @@ export async function guardWorkspaceOverrideAvailability(
   const next = serializeDoc(doc, current);
   state.saveWorkspaceYaml(next);
   state.desiredWorkspaceYaml = next;
+}
+
+function findCompatibleOriginalOverrideRange(
+  packageName: string,
+  selector: string,
+  preferred: string,
+  originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>,
+): string | undefined {
+  const exactMatch = originalOverrides.get(selector);
+  if (exactMatch) {
+    return isCompatibleRange(exactMatch.value, preferred) ? exactMatch.value : undefined;
+  }
+
+  const compatible = new Set<string>();
+  for (const [originalSelector, original] of originalOverrides) {
+    if (getBarePackageName(originalSelector) !== packageName) continue;
+    if (isCompatibleRange(original.value, preferred)) compatible.add(original.value);
+  }
+  return compatible.size === 1 ? compatible.values().next().value : undefined;
+}
+
+function isCompatibleRange(value: string, version: string): boolean {
+  if (semver.valid(value)) return false;
+  const range = normalizeRange(value);
+  return Boolean(range && semver.satisfies(version, range));
+}
+
+function getQualifiedSelectorRange(packageName: string, selector: string): string | undefined {
+  if (isPlainPackageName(selector)) return undefined;
+  return normalizeRange(selector.slice(packageName.length + 1)) ?? undefined;
+}
+
+function getSpecifierRange(value: string): string | undefined {
+  const exact = semver.valid(value);
+  return exact ? `=${exact}` : (normalizeRange(value) ?? undefined);
+}
+
+function hasPublishedVulnerableMatch(
+  value: string,
+  vulnerableRange: string,
+  available: readonly string[],
+): boolean {
+  const range = getSpecifierRange(value);
+  if (!range) return false;
+  return available.some((version) => {
+    const stable = semver.valid(version);
+    return Boolean(
+      stable &&
+      semver.prerelease(stable) === null &&
+      semver.satisfies(stable, range) &&
+      semver.satisfies(stable, vulnerableRange),
+    );
+  });
+}
+
+function raiseOverrideFloorPastVulnerableVersions(
+  value: string,
+  vulnerableRange: string,
+  available: readonly string[],
+): string | undefined {
+  const range = getSpecifierRange(value);
+  const minimum = range ? semver.minVersion(range) : null;
+  if (!range || !minimum) return undefined;
+
+  const stableVersions = available
+    .map((version) => semver.valid(version))
+    .filter((version): version is string => version !== null && semver.prerelease(version) === null)
+    .sort((a, b) => semver.compare(a, b));
+  const vulnerableVersions = stableVersions.filter(
+    (version) => semver.satisfies(version, range) && semver.satisfies(version, vulnerableRange),
+  );
+  const highestVulnerable = vulnerableVersions.at(-1);
+  if (!highestVulnerable) return undefined;
+
+  const safeFloor = stableVersions.find(
+    (version) =>
+      semver.gte(version, minimum) &&
+      semver.gt(version, highestVulnerable) &&
+      !semver.satisfies(version, vulnerableRange),
+  );
+  if (!safeFloor) return undefined;
+
+  const adjusted = semver.valid(value) ? safeFloor : formatPreferredOverrideValue(value, safeFloor);
+  const adjustedRange = getSpecifierRange(adjusted);
+  if (
+    !adjustedRange ||
+    !stableVersions.some((version) => semver.satisfies(version, adjustedRange))
+  ) {
+    return undefined;
+  }
+  if (!hasPublishedVulnerableMatch(adjusted, vulnerableRange, stableVersions)) return adjusted;
+
+  // Some disjoint OR ranges cannot be made safe by changing each clause's
+  // floor independently. A simple lower bound is safe when verified against
+  // every published stable version in the registry result.
+  const lowerBound = `>=${safeFloor}`;
+  return hasPublishedVulnerableMatch(lowerBound, vulnerableRange, stableVersions)
+    ? undefined
+    : lowerBound;
+}
+
+/**
+ * Keep an audit override's range semantics when moving its lower bound to a
+ * preferred published version. In particular, `^1.2.3` must remain a caret
+ * range so later compatible patch releases can still be selected.
+ */
+function formatPreferredOverrideValue(value: string, preferred: string): string {
+  if (semver.valid(value)) return preferred;
+  const range = normalizeRange(value);
+  if (!range) return preferred;
+
+  const clauses = value.split(/\s*\|\|\s*/);
+  if (clauses.length > 1) {
+    return clauses.map((clause) => `${clause.trim()} >=${preferred}`).join(' || ');
+  }
+
+  return clauses
+    .map((clause) => {
+      const caretOrTilde = clause.match(/^(\s*[~^]\s*)\S+(.*)$/);
+      if (caretOrTilde) {
+        return `${caretOrTilde[1]}${preferred}${caretOrTilde[2]}`;
+      }
+
+      if (/(^|\s)(?:>=|>)\s*\S+/.test(clause)) {
+        return clause.replace(/(^|\s)(?:>=|>)\s*\S+/, `$1>=${preferred}`);
+      }
+
+      return `${clause.trimEnd()} >=${preferred}`;
+    })
+    .join(' || ');
 }
 
 /** `undefined` means the override is not a plain semver spec and is left alone. */
@@ -193,9 +374,8 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
     }
     // Qualified override (e.g. `vite@<=6.4.1: '>=6.4.2'`): if the bare
     // package is in the catalog and its current version satisfies the
-    // override selector, derive a concrete minimum version from the fix
-    // range and promote it into the catalog so that pnpm installs the
-    // smallest patched release rather than the latest in the range.
+    // override selector, promote the fix specifier into the catalog. Keep a
+    // range as a range so later compatible releases remain eligible.
     if (!isPlainPackageName(key)) {
       const bareName = getBarePackageName(key);
       if (catalogNames.has(bareName)) {
@@ -212,7 +392,7 @@ export function syncAuditOverridesIntoCatalog(state: WorkspaceState, logger: Log
             const existing = updates.get(bareName);
             const base = existing ?? catalogVer ?? '';
             if (base && compareSemVer(minVer.version, base) > 0) {
-              updates.set(bareName, minVer.version);
+              updates.set(bareName, semver.valid(val) ? minVer.version : val);
               continue; // discard the override — catalog will be patched
             }
             // The existing update/catalog is already >= minVer. Discard the

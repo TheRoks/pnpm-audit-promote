@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { refreshDeps } from '../src/refresh';
 import { silentLogger } from '../src/logger';
 import { makeRecordingRunner } from './helpers/recordingRunner';
+import { PnpmCommandFailedError } from '../src/errors';
 
 let tmp: string;
 
@@ -75,6 +76,107 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // CI runs (which default pnpm to --frozen-lockfile) don't reject installs
     // that follow the tool's own catalog/override mutations.
     expect(installs[0]!.args).toEqual(['install', '--no-frozen-lockfile']);
+  });
+
+  it('REQ-CORE-011: asks pnpm to approve ignored builds and resumes the install', async () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(wsPath, "savePrefix: ''\nallowBuilds:\n  esbuild: true\n", 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+    const { runner } = makeRecordingRunner();
+    const calls: string[] = [];
+    let installs = 0;
+    runner.run = async (args) => {
+      calls.push(args.join(' '));
+      if (args[0] === 'install' && installs++ === 0) {
+        throw new PnpmCommandFailedError(args, 1, 'ERR_PNPM_IGNORED_BUILDS');
+      }
+    };
+    runner.runInteractive = async (args) => {
+      calls.push(args.join(' '));
+      fs.writeFileSync(wsPath, 'allowBuilds:\n  esbuild: true\n  canvas: false\n', 'utf8');
+    };
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    try {
+      await refreshDeps({
+        path: tmp,
+        force: true,
+        logger: silentLogger,
+        pnpm: runner,
+        skipAudit: true,
+        skipDedupe: true,
+      });
+    } finally {
+      if (stdinTty) Object.defineProperty(process.stdin, 'isTTY', stdinTty);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutTty) Object.defineProperty(process.stdout, 'isTTY', stdoutTty);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+
+    expect(calls).toEqual([
+      'install --no-frozen-lockfile',
+      'approve-builds',
+      'install --no-frozen-lockfile',
+    ]);
+    expect(fs.readFileSync(wsPath, 'utf8')).toContain("savePrefix: ''");
+    expect(fs.readFileSync(wsPath, 'utf8')).toContain('canvas: false');
+  });
+
+  it('REQ-CORE-011: explains how to resolve ignored builds without a terminal', async () => {
+    fs.writeFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n', 'utf8');
+    fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "root" }', 'utf8');
+    const { runner } = makeRecordingRunner();
+    runner.run = async (args) => {
+      throw new PnpmCommandFailedError(args, 1, 'ERR_PNPM_IGNORED_BUILDS');
+    };
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: false });
+    try {
+      await expect(
+        refreshDeps({ path: tmp, force: true, logger: silentLogger, pnpm: runner }),
+      ).rejects.toThrow(/Run pnpm approve-builds in the target workspace/);
+    } finally {
+      if (stdinTty) Object.defineProperty(process.stdin, 'isTTY', stdinTty);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+    }
+  });
+
+  it('REQ-OVERRIDES-010: does not replace an audited-safe locked transitive version with an older patched minimum', async () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(wsPath, 'overrides:\n  pdfjs-dist@<=4.1.392: ^4.1.393\n', 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      '{ "name": "root", "packageManager": "pnpm@12.9.1" }',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'pnpm-lock.yaml'),
+      'lockfileVersion: 9.0\npackages:\n  pdfjs-dist@4.10.38: {}\n',
+      'utf8',
+    );
+    const { runner } = makeRecordingRunner({
+      'audit --json': JSON.stringify({ advisories: {} }),
+      'view pdfjs-dist versions --json': JSON.stringify(['4.2.67', '4.10.38']),
+    });
+    runner.runAllowFail = async (args) => {
+      if (args.join(' ') === 'audit --fix override') {
+        fs.writeFileSync(wsPath, 'overrides:\n  pdfjs-dist@<=4.1.392: 4.2.67\n', 'utf8');
+      }
+      return 0;
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      releaseAgeCheck: false,
+    });
+
+    expect(fs.readFileSync(wsPath, 'utf8')).toContain('pdfjs-dist@<=4.1.392: ^4.1.393');
   });
 
   it('REQ-WORKSPACE-008: runs without a pnpm-workspace.yaml when package.json declares pnpm', async () => {
@@ -1311,6 +1413,153 @@ describe('refreshDeps integration (mocked pnpm)', () => {
     // REQ-PNPM11-010: the user's global gate is preserved verbatim.
     expect(yamlAfter).toContain('minimumReleaseAge: 720');
     expect(yamlAfter).not.toMatch(/^minimumReleaseAge:\s*0\s*$/m);
+  });
+
+  it('REQ-PNPM11-013: carries release-age-blocked fixes into the returned run summary', async () => {
+    const workspacePath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(workspacePath, 'minimumReleaseAge: 720\npackages: []\n', 'utf8');
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.1.2' }),
+      'utf8',
+    );
+    const freshPublishTime = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { runner } = makeRecordingRunner(
+      {
+        'audit --json': JSON.stringify({ advisories: {} }),
+        'view axios time --json': JSON.stringify({ '1.7.4': freshPublishTime }),
+      },
+      { version: '11.1.2' },
+    );
+    runner.runAllowFail = async (args) => {
+      if (args.join(' ') === 'audit --fix override') {
+        fs.writeFileSync(
+          workspacePath,
+          'minimumReleaseAge: 720\npackages: []\noverrides:\n  axios: 1.7.4\n',
+          'utf8',
+        );
+      }
+      return 0;
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(result.summary?.releaseAgeBlockedOverrides).toEqual([
+      {
+        selector: 'axios',
+        name: 'axios',
+        value: '1.7.4',
+        minimumReleaseAgeMinutes: 720,
+      },
+    ]);
+  });
+
+  it('REQ-PNPM11-012, REQ-PNPM11-013: reports an adjusted override blocked by release age', async () => {
+    const workspacePath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(
+      workspacePath,
+      "minimumReleaseAge: 720\npackages: []\noverrides:\n  'smol-toml@<=1.8.0': '^1.7.1'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.1.2' }),
+      'utf8',
+    );
+    const freshPublishTime = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { runner } = makeRecordingRunner(
+      {
+        'audit --json': JSON.stringify({ advisories: {} }),
+        'view smol-toml versions --json': JSON.stringify(['1.7.1', '1.8.0', '1.9.0', '1.9.1']),
+        'view smol-toml time --json': JSON.stringify({
+          '1.7.1': '2020-01-01T00:00:00.000Z',
+          '1.8.0': '2020-01-01T00:00:00.000Z',
+          '1.9.0': freshPublishTime,
+          '1.9.1': freshPublishTime,
+        }),
+      },
+      { version: '11.1.2' },
+    );
+    runner.runAllowFail = async (args) => {
+      if (args.join(' ') === 'audit --fix override') {
+        fs.writeFileSync(
+          workspacePath,
+          "minimumReleaseAge: 720\npackages: []\noverrides:\n  'smol-toml@<=1.8.0': '^1.7.1'\n",
+          'utf8',
+        );
+      }
+      return 0;
+    };
+
+    const result = await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    expect(fs.readFileSync(workspacePath, 'utf8')).not.toContain('smol-toml@<=1.8.0');
+    expect(result.summary?.releaseAgeBlockedOverrides).toEqual([
+      {
+        selector: 'smol-toml@<=1.8.0',
+        name: 'smol-toml',
+        value: '^1.9.0',
+        minimumReleaseAgeMinutes: 720,
+      },
+    ]);
+  });
+
+  it('REQ-OVERRIDES-011: keeps the original caret floor after pnpm writes an exact audit fix under a changed selector', async () => {
+    const workspacePath = path.join(tmp, 'pnpm-workspace.yaml');
+    fs.writeFileSync(
+      workspacePath,
+      "packages: []\ncatalog:\n  vite: '6.3.5'\noverrides:\n  'vite@<=6.4.0': '^6.4.2'\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'root', packageManager: 'pnpm@11.1.2' }),
+      'utf8',
+    );
+    const { runner } = makeRecordingRunner(
+      {
+        'audit --json': JSON.stringify({ advisories: {} }),
+        'view vite versions --json': JSON.stringify(['6.3.5', '6.4.3', '6.4.4']),
+      },
+      { version: '11.1.2' },
+    );
+    runner.runAllowFail = async (args) => {
+      if (args.join(' ') === 'audit --fix override') {
+        fs.writeFileSync(
+          workspacePath,
+          "packages: []\ncatalog:\n  vite: '6.3.5'\noverrides:\n  'vite@<=6.4.1': '6.4.3'\n",
+          'utf8',
+        );
+      }
+      return 0;
+    };
+
+    await refreshDeps({
+      path: tmp,
+      force: true,
+      logger: silentLogger,
+      pnpm: runner,
+      skipDedupe: true,
+      summary: false,
+    });
+
+    const yamlAfter = fs.readFileSync(workspacePath, 'utf8');
+    expect(yamlAfter).toContain("vite: '^6.4.2'");
+    expect(yamlAfter).not.toContain('overrides:');
   });
 
   it("REQ-PNPM11-011: preserves the user's existing minimumReleaseAgeExclude block verbatim", async () => {

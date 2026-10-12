@@ -161,6 +161,8 @@ export interface BlockedOverride {
   name: string;
   /** The override value pnpm wrote (exact version or range). */
   value: string;
+  /** The configured minimum age that blocked the override. */
+  minimumReleaseAgeMinutes: number;
 }
 
 /**
@@ -243,7 +245,7 @@ export async function guardWorkspaceOverrideReleaseAge(
       continue;
     }
 
-    dropped.push({ key, name, value: val });
+    dropped.push({ key, name, value: val, minimumReleaseAgeMinutes: minutes });
     logger.warn(
       `Dropping override ${key} -> ${val}: no published version satisfying it is older than ` +
         `minimumReleaseAge (${minutes} min). Re-run once the patch matures, or add it to ` +

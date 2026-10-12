@@ -25,7 +25,8 @@ import {
   syncAuditOverridesIntoCatalog,
 } from './audit/promoteWorkspaceOverrides';
 import { syncPackageJsonOverridesIntoCatalog } from './audit/promotePackageJsonOverrides';
-import { guardWorkspaceOverrideReleaseAge } from './audit/releaseAge';
+import { guardWorkspaceOverrideReleaseAge, type BlockedOverride } from './audit/releaseAge';
+import { readBaselineSafeVersions } from './audit/baselineSafeVersions';
 import { migrateYamlOverridesToPackageJson } from './audit/ignoreWorkspaceMigration';
 import { applyCatalogUpdates } from './catalog';
 import {
@@ -45,10 +46,12 @@ import type {
   CatalogChange,
   OverrideChange,
   PackageJsonDepChange,
+  ReleaseAgeBlockedOverride,
   RunSummaryData,
 } from './summary/types';
 import { createProgressLogger } from './progress';
 import { defaultConfirmDestructive, type ConfirmFn } from './prompt';
+import { PnpmCommandFailedError } from './errors';
 import pkg from '../package.json' with { type: 'json' };
 
 /**
@@ -199,16 +202,21 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
   });
 
   let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+  let releaseAgeBlockedOverrides: ReleaseAgeBlockedOverride[] = [];
   if (!skipAudit) {
-    pkgJsonDepChanges = await runAuditPhase(state, pnpm, logger, progressLogger, {
+    const auditResult = await runAuditPhase(state, pnpm, logger, progressLogger, {
       skipDedupe: Boolean(options.skipDedupe),
       allowMajor: options.allowMajor ?? true,
       releaseAgeCheck: options.releaseAgeCheck ?? true,
       dryRun,
       preCleanupAuditRaw: initial.preCleanupAuditRaw,
+      baselineSafeVersions: initial.baselineSafeVersions,
+      originalOverrides: initial.originalOverrides,
       ignoreWorkspace: options.ignoreWorkspace ?? false,
       auditFixMode: options.auditFixMode ?? 'override',
     });
+    pkgJsonDepChanges = auditResult.pkgJsonDepChanges;
+    releaseAgeBlockedOverrides = auditResult.releaseAgeBlockedOverrides;
   } else {
     logger.detail('Skipped audit and catalog promotion (--no-audit).');
   }
@@ -226,6 +234,7 @@ export async function refreshDeps(options: RefreshOptions): Promise<RefreshResul
     originalOverrides: initial.originalOverrides,
     initialAdvisories: initial.initialAdvisories,
     pkgJsonDepChanges,
+    releaseAgeBlockedOverrides,
   });
 
   if (summary.auditStatus === 'failed') {
@@ -358,6 +367,7 @@ interface InitialState {
    * lets us still raise the declared floor to the safe minimum.
    */
   preCleanupAuditRaw: string;
+  baselineSafeVersions: ReadonlyMap<string, string>;
 }
 
 async function captureInitialState(
@@ -370,6 +380,7 @@ async function captureInitialState(
   // the run-summary at the end.
   const originalYaml = state.desiredWorkspaceYaml;
   const originalPjText = safeReadFile(state.rootPackageJson);
+  const originalLockText = safeReadFile(state.lockFile);
   const originalCatalog = readCatalogSnapshot(originalYaml);
   const originalOverrides = readAllOverrides(originalYaml, originalPjText);
   const workspaceName = readPackageJsonName(originalPjText);
@@ -413,6 +424,7 @@ async function captureInitialState(
     workspaceName,
     initialAdvisories,
     preCleanupAuditRaw,
+    baselineSafeVersions: readBaselineSafeVersions(originalLockText, preCleanupAuditRaw),
   };
 }
 
@@ -459,10 +471,15 @@ async function runAuditPhase(
     releaseAgeCheck: boolean;
     dryRun: boolean;
     preCleanupAuditRaw: string;
+    baselineSafeVersions: ReadonlyMap<string, string>;
+    originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
     ignoreWorkspace: boolean;
     auditFixMode: AuditFixMode;
   },
-): Promise<PackageJsonDepChange[]> {
+): Promise<{
+  pkgJsonDepChanges: PackageJsonDepChange[];
+  releaseAgeBlockedOverrides: ReleaseAgeBlockedOverride[];
+}> {
   // Capture a post-cleanup audit JSON and share it with the pre-audit
   // catalog bump (which needs the unmasked vulnerability set to decide
   // which direct deps to bump). This is *separate* from the initial
@@ -481,9 +498,11 @@ async function runAuditPhase(
     postCleanupAuditStdout,
     opts.preCleanupAuditRaw,
   );
-  await auditFix(state, pnpm, progressLogger, {
+  const blockedOverrides = await auditFix(state, pnpm, progressLogger, {
     releaseAgeCheck: opts.releaseAgeCheck,
     mode: opts.auditFixMode,
+    baselineSafeVersions: opts.baselineSafeVersions,
+    originalOverrides: opts.originalOverrides,
   });
 
   // Under `--ignore-workspace`, pnpm deliberately ignores pnpm-workspace.yaml,
@@ -499,7 +518,15 @@ async function runAuditPhase(
     installLabel: 'Reinstall dependencies (post-audit reconciliation)',
   });
 
-  return pkgJsonDepChanges;
+  return {
+    pkgJsonDepChanges,
+    releaseAgeBlockedOverrides: blockedOverrides.map((blocked) => ({
+      selector: blocked.key,
+      name: blocked.name,
+      value: blocked.value,
+      minimumReleaseAgeMinutes: blocked.minimumReleaseAgeMinutes,
+    })),
+  };
 }
 
 function canceledResult(durationMs: number): RefreshResult {
@@ -542,7 +569,30 @@ async function runAndRestore(
   logger: Logger,
   args: string[],
 ): Promise<void> {
-  await pnpm.run(args);
+  try {
+    await pnpm.run(args);
+  } catch (error) {
+    if (
+      args[0] !== 'install' ||
+      !(error instanceof PnpmCommandFailedError) ||
+      !error.stderr.includes('ERR_PNPM_IGNORED_BUILDS')
+    ) {
+      throw error;
+    }
+    if (!process.stdin.isTTY || !process.stdout.isTTY || !pnpm.runInteractive) {
+      throw new PnpmCommandFailedError(
+        error.args,
+        error.exitCode,
+        error.stderr,
+        'Build scripts need a decision. Run pnpm approve-builds in the target workspace and rerun this tool, or run this tool in an interactive terminal. --force does not approve builds.',
+      );
+    }
+    logger.warn('pnpm requires a build-script decision. Opening pnpm approve-builds...');
+    await pnpm.runInteractive(['approve-builds']);
+    state.refreshHasWorkspaceYaml();
+    state.preserveApprovedBuilds(logger);
+    await pnpm.run(args);
+  }
   if (state.refreshHasWorkspaceYaml()) {
     logger.detail(`Detected pnpm-workspace.yaml created by pnpm ${args[0]}.`);
   }
@@ -639,8 +689,13 @@ async function auditFix(
   state: WorkspaceState,
   pnpm: PnpmRunner,
   logger: Logger,
-  options: { releaseAgeCheck: boolean; mode: AuditFixMode },
-): Promise<void> {
+  options: {
+    releaseAgeCheck: boolean;
+    mode: AuditFixMode;
+    baselineSafeVersions: ReadonlyMap<string, string>;
+    originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
+  },
+): Promise<BlockedOverride[]> {
   logger.step('Apply pnpm audit fixes');
   // pnpm 11/12 require `--fix` to include an explicit value (`override` or `update`)
   // and rejects the bare flag with ERR_PNPM_INVALID_FIX_OPTION. We always
@@ -671,15 +726,22 @@ async function auditFix(
   // verbatim.
   state.resetMinimumReleaseAgeExclude(logger);
 
-  // REQ-PNPM11-012: because the exclude list was just reset, an override pnpm
-  // pinned to a too-fresh patched version would make the reinstall below fail
-  // under pnpm's strict release-age resolution. Drop any such override (rather
-  // than re-expand the exclude list) so the install keeps working.
-  if (options.mode === 'override' && options.releaseAgeCheck) {
-    await guardWorkspaceOverrideReleaseAge(state, pnpm, logger);
-  }
+  await guardWorkspaceOverrideAvailability(
+    state,
+    pnpm,
+    logger,
+    options.baselineSafeVersions,
+    options.originalOverrides,
+  );
 
-  await guardWorkspaceOverrideAvailability(state, pnpm, logger);
+  // REQ-PNPM11-012: validate release age after availability reconciliation,
+  // which may raise an audit override's floor. Checking before that adjustment
+  // could accept an old version from the original range, then leave only fresh
+  // versions for the post-audit install to resolve.
+  const blockedOverrides =
+    options.mode === 'override' && options.releaseAgeCheck
+      ? await guardWorkspaceOverrideReleaseAge(state, pnpm, logger)
+      : [];
 
   // Safety net: promote any catalog-eligible overrides into the catalog.
   state.desiredWorkspaceYaml = syncAuditOverridesIntoCatalog(state, logger);
@@ -688,6 +750,7 @@ async function auditFix(
     state.desiredWorkspaceYaml,
     logger,
   );
+  return blockedOverrides;
 }
 
 function readPackageJsonName(text: string | null): string | undefined {

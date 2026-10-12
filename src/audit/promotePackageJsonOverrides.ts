@@ -60,7 +60,7 @@ export function syncPackageJsonOverridesIntoCatalog(
               const existing = promotions.get(bare);
               const base = existing ?? catalogVer ?? '';
               if (!base || compareSemVer(minVer.version, base) > 0) {
-                promotions.set(bare, minVer.version);
+                promotions.set(bare, semver.valid(val) ? minVer.version : val);
                 continue;
               }
             }

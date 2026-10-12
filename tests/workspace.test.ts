@@ -202,6 +202,24 @@ describe('WorkspaceState', () => {
     expect(fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8')).toContain('18.3.1');
   });
 
+  it('REQ-CORE-011: preserves pnpm build decisions without adopting other workspace rewrites', () => {
+    const wsPath = path.join(tmp, 'pnpm-workspace.yaml');
+    const desired = "savePrefix: ''\nallowBuilds:\n  esbuild: true\ncatalog:\n  react: '18.2.0'\n";
+    fs.writeFileSync(wsPath, desired, 'utf8');
+    const ws = WorkspaceState.initialize(tmp);
+    fs.writeFileSync(
+      wsPath,
+      "allowBuilds:\n  esbuild: true\n  canvas: false\ncatalog:\n  react: '18.2.0'\n",
+      'utf8',
+    );
+
+    expect(ws.preserveApprovedBuilds(silentLogger)).toBe(true);
+    expect(ws.readWorkspaceYaml()).toContain("savePrefix: ''");
+    expect(ws.readWorkspaceYaml()).toContain('canvas: false');
+    expect(ws.desiredWorkspaceYaml).toBe(ws.readWorkspaceYaml());
+    expect(ws.restoreWorkspaceYaml(silentLogger)).toBe(false);
+  });
+
   it('REQ-CORE-003, REQ-PNPM10-002: does not restore when desired content is empty', () => {
     fs.writeFileSync(
       path.join(tmp, 'pnpm-workspace.yaml'),

@@ -119,7 +119,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
 
     const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
 
-    expect(dropped).toEqual([{ key: 'axios', name: 'axios', value: '1.7.4' }]);
+    expect(dropped).toEqual([
+      { key: 'axios', name: 'axios', value: '1.7.4', minimumReleaseAgeMinutes: MINUTES },
+    ]);
     const after = fs.readFileSync(path.join(tmp, 'pnpm-workspace.yaml'), 'utf8');
     expect(after).not.toContain('overrides');
     expect(after).not.toContain('1.7.4');
@@ -168,7 +170,9 @@ describe('guardWorkspaceOverrideReleaseAge', () => {
 
     const dropped = await guardWorkspaceOverrideReleaseAge(ws, runner, silentLogger, { now: NOW });
 
-    expect(dropped).toEqual([{ key: 'vite', name: 'vite', value: '>=7.0.0' }]);
+    expect(dropped).toEqual([
+      { key: 'vite', name: 'vite', value: '>=7.0.0', minimumReleaseAgeMinutes: MINUTES },
+    ]);
   });
 
   it('REQ-PNPM11-012: keeps a range override when at least one satisfying version is old enough', async () => {

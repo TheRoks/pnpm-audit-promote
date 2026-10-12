@@ -34,6 +34,7 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   const directChanges = diffCatalog(data.originalCatalog, data.finalCatalog);
   const pkgJsonChanges: readonly PackageJsonDepChange[] = data.pkgJsonDepChanges;
   const overrideChanges = diffOverrides(data.originalOverrides, data.finalOverrides);
+  const releaseAgeBlockedOverrides = data.releaseAgeBlockedOverrides ?? [];
   const { fixed, remaining } =
     auditStatus === 'complete'
       ? diffAdvisories(data.initialAdvisories, data.finalAdvisories)
@@ -70,6 +71,12 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   } else if (auditStatus === 'failed') {
     out.push(
       `  ${c.yellow('⚠')}  ${c.yellow('Final audit verification failed; vulnerability status is unknown.')}`,
+    );
+    out.push('');
+  }
+  if (releaseAgeBlockedOverrides.length > 0) {
+    out.push(
+      `  ${c.yellow('⚠')}  ${c.yellow(`${releaseAgeBlockedOverrides.length} audit ${pluralize(releaseAgeBlockedOverrides.length, 'fix')} blocked by minimumReleaseAge.`)}`,
     );
     out.push('');
   }
@@ -200,6 +207,17 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
     }
   }
   out.push('');
+
+  if (releaseAgeBlockedOverrides.length > 0) {
+    out.push(`  ${c.bold('Fixes blocked by release-age policy')}`);
+    out.push(`  ${rule}`);
+    for (const blocked of releaseAgeBlockedOverrides) {
+      out.push(
+        `    ${sanitizeDisplayText(blocked.selector)}  ${c.dim('→')}  ${sanitizeDisplayText(blocked.value)}  ${c.yellow(`minimumReleaseAge: ${blocked.minimumReleaseAgeMinutes} min`)}`,
+      );
+    }
+    out.push('');
+  }
 
   if (auditStatus === 'complete') {
     // Fixed vulnerabilities

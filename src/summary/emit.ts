@@ -10,7 +10,13 @@ import {
   safeReadFile,
 } from './collect';
 import { renderTerminalSummary } from './render';
-import type { AdvisorySummary, AuditStatus, PackageJsonDepChange, RunSummaryData } from './types';
+import type {
+  AdvisorySummary,
+  AuditStatus,
+  PackageJsonDepChange,
+  ReleaseAgeBlockedOverride,
+  RunSummaryData,
+} from './types';
 
 /**
  * Inputs needed to assemble a {@link RunSummaryData} after the orchestrator
@@ -29,6 +35,8 @@ export interface CollectRunSummaryArgs {
   initialAdvisories: readonly AdvisorySummary[];
   /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
   pkgJsonDepChanges: readonly PackageJsonDepChange[];
+  /** Audit fixes dropped by the configured minimumReleaseAge gate. */
+  releaseAgeBlockedOverrides?: readonly ReleaseAgeBlockedOverride[];
 }
 
 /**
@@ -74,6 +82,7 @@ export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<Ru
     initialAdvisories: args.initialAdvisories,
     finalAdvisories,
     pkgJsonDepChanges: args.pkgJsonDepChanges,
+    releaseAgeBlockedOverrides: args.releaseAgeBlockedOverrides ?? [],
   };
 }
 

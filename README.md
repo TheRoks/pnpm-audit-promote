@@ -13,6 +13,13 @@ catalog bumped _before_ `pnpm audit --fix` runs, so they never end up as
 overrides. Transitive-only vulnerabilities are still handled by
 `pnpm audit --fix` adding overrides as usual.
 
+Before the final install, generated overrides are checked against published
+versions. If an override would replace a higher stable version already in the
+original lockfile, and that version was not flagged by the initial audit, the
+tool keeps the higher version when it is available in the same major release.
+This avoids introducing vulnerable dependency branches by downgrading to a
+patched minimum.
+
 ## Why
 
 In a pnpm 10+ workspace using [catalogs][pnpm-catalogs], `pnpm audit --fix`
@@ -225,6 +232,14 @@ The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` imp
 
 ## Troubleshooting
 
+- **`ERR_PNPM_IGNORED_BUILDS` during install** — a newly resolved dependency
+  needs a build-script decision. In an interactive terminal, the tool opens
+  `pnpm approve-builds` and then retries the install. Select only scripts you
+  trust; pnpm records both allowed and denied packages in the target
+  workspace's build settings. In CI or another noninteractive environment,
+  run `pnpm approve-builds` in the target workspace beforehand and commit the
+  resulting decision. `--force` skips only the cleanup confirmation; it does
+  not approve dependency scripts.
 - **`pnpm is not installed or not on PATH`** — install pnpm globally
   (`npm i -g pnpm`) or use Corepack.
 - **pnpm 12 rejects a workspace setting** — pnpm 12 rejects unrecognized

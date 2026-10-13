@@ -10,6 +10,13 @@
 - Add opt-in `auditFixMode: 'update'` / `--audit-fix-mode update` for pnpm 11+.
 - Exercise pnpm 12 in real-pnpm integration coverage, including macOS and Windows.
 
+## [1.10.3](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.2...v1.10.3) (2026-10-12)
+
+
+### Bug Fixes
+
+* **audit:** guard unsafe targets and refactor refresh flow ([#124](https://github.com/TheRoks/pnpm-audit-promote/issues/124)) ([6688677](https://github.com/TheRoks/pnpm-audit-promote/commit/6688677fd6985d15f86057ad05bd441303cb3cef))
+
 ## [1.10.2](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.1...v1.10.2) (2026-10-06)
 
 

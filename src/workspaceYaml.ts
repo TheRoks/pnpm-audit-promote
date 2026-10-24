@@ -89,6 +89,33 @@ export function parseWorkspaceDoc(yaml: string): WorkspaceYamlDocument | null {
   return tryParse(yaml);
 }
 
+/** Merge pnpm approve-builds decisions from `current` into `desired`. */
+export function mergeApprovedBuildSettings(
+  desired: string,
+  current: string,
+  removeMissing = true,
+): string {
+  const actual = tryParse(current);
+  const target = tryParse(desired);
+  if (!actual || !target) return desired;
+
+  let changed = false;
+  for (const key of [
+    'allowBuilds',
+    'permissions',
+    'onlyBuiltDependencies',
+    'ignoredBuiltDependencies',
+    'neverBuiltDependencies',
+  ]) {
+    const currentValue = actual.get(key);
+    if (JSON.stringify(currentValue) === JSON.stringify(target.get(key))) continue;
+    if (actual.has(key)) target.set(key, currentValue);
+    else if (removeMissing) target.delete(key);
+    changed = true;
+  }
+  return changed ? serializeDoc(target, desired) : desired;
+}
+
 /** Collapse 3+ consecutive newlines down to a single blank line. */
 export function collapseBlankLines(text: string): string {
   return text.replace(/(\r?\n){3,}/g, (_m) => {

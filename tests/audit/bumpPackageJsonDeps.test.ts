@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { WorkspaceState } from '../../src/workspace';
+import { WorkspaceMutations } from '../../src/workspace/mutations';
 import { silentLogger } from '../../src/logger';
 import { makeRecordingRunner } from '../helpers/recordingRunner';
 import {
@@ -631,7 +632,7 @@ describe('applyPackageJsonDepBumps', () => {
       after: '4.17.21',
       tier: 'patch',
     };
-    applyPackageJsonDepBumps([bump], false);
+    applyPackageJsonDepBumps([bump], new WorkspaceMutations(tmp));
 
     const result = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as {
       dependencies: Record<string, string>;
@@ -655,7 +656,7 @@ describe('applyPackageJsonDepBumps', () => {
       after: '^4.17.21',
       tier: 'patch',
     };
-    applyPackageJsonDepBumps([bump], false);
+    applyPackageJsonDepBumps([bump], new WorkspaceMutations(tmp));
 
     const result = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as {
       dependencies: Record<string, string>;
@@ -676,7 +677,7 @@ describe('applyPackageJsonDepBumps', () => {
       after: '4.17.21',
       tier: 'patch',
     };
-    applyPackageJsonDepBumps([bump], true);
+    applyPackageJsonDepBumps([bump], new WorkspaceMutations(tmp, true));
 
     expect(fs.readFileSync(pkgJsonPath, 'utf8')).toBe(original);
   });
@@ -711,7 +712,7 @@ describe('applyPackageJsonDepBumps', () => {
         tier: 'minor',
       },
     ];
-    applyPackageJsonDepBumps(bumps, false);
+    applyPackageJsonDepBumps(bumps, new WorkspaceMutations(tmp));
 
     const result = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as {
       dependencies: Record<string, string>;
@@ -752,7 +753,7 @@ describe('applyPackageJsonDepBumps', () => {
         tier: 'minor',
       },
     ];
-    applyPackageJsonDepBumps(bumps, false);
+    applyPackageJsonDepBumps(bumps, new WorkspaceMutations(tmp));
 
     expect(
       (JSON.parse(fs.readFileSync(pkgA, 'utf8')) as { dependencies: Record<string, string> })

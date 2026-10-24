@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import JSON5 from 'json5';
+import semver from 'semver';
 import * as YAML from 'yaml';
 import { refreshDeps } from '../../src/refresh';
 import { silentLogger } from '../../src/logger';
 import {
   detectPnpmMajor,
+  detectPnpmVersion,
   expectedPnpmMajor,
   setupRealWorkspace,
   shouldRunIntegration,
@@ -26,6 +29,7 @@ import {
  */
 describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real pnpm', () => {
   const localMajor = detectPnpmMajor();
+  const localVersion = detectPnpmVersion();
   const wantMajor = expectedPnpmMajor();
   const hasMajorMismatch = wantMajor != null && localMajor != null && wantMajor !== localMajor;
   if (wantMajor != null && localMajor !== wantMajor) {
@@ -203,6 +207,131 @@ describe.skipIf(!shouldRunIntegration())('integration: refreshDeps against real 
       const generated = YAML.parse(ws.readWorkspaceYaml()) as { packages?: string[] };
       expect(generated.packages).toContain('apps/*');
     });
+
+    describe.skipIf(!localVersion || !semver.gte(localVersion, '12.15.0'))(
+      'pnpm 12.15 delegated settings',
+      () => {
+        it('REQ-INT-PNPM12-003: writes a delegated catalog to its owner and preserves include mappings', async () => {
+          ws = setupRealWorkspace('v12-delegated-config');
+
+          const result = await refreshDeps({
+            path: ws.root,
+            force: true,
+            logger: silentLogger,
+            summary: false,
+          });
+
+          expect(result.canceled).toBe(false);
+          const rootYaml = ws.readWorkspaceYaml();
+          const catalogYaml = fs.readFileSync(path.join(ws.root, 'config', 'catalog.yaml'), 'utf8');
+          const policyYaml = fs.readFileSync(path.join(ws.root, 'config', 'policy.yaml'), 'utf8');
+          const catalog = YAML.parse(catalogYaml) as { catalog?: Record<string, string> };
+          const policy = YAML.parse(policyYaml) as {
+            audit?: { level?: string };
+            minimumReleaseAge?: number;
+            minimumReleaseAgeExclude?: string[];
+          };
+
+          expect(rootYaml).toContain('./config/catalog.yaml: [catalog]');
+          expect(rootYaml).toContain(
+            './config/policy.yaml: [audit, minimumReleaseAge, minimumReleaseAgeExclude, overrides]',
+          );
+          expect(catalog.catalog?.['lodash']).toBeDefined();
+          expect(compareSemver(catalog.catalog!['lodash']!, '4.17.21')).toBeGreaterThanOrEqual(0);
+          expect(policy.audit?.level).toBe('high');
+          expect(policy.minimumReleaseAge).toBe(720);
+          expect(policy.minimumReleaseAgeExclude).toEqual(['@scope/*']);
+        });
+
+        it('REQ-INT-PNPM12-004: stops before cleanup when an audit setting is owned by a config dependency', async () => {
+          ws = setupRealWorkspace('v12-workspaces-autocreate');
+          const rootPackagePath = path.join(ws.root, 'package.json');
+          const rootPackage = JSON.parse(fs.readFileSync(rootPackagePath, 'utf8')) as {
+            packageManager?: string;
+          };
+          rootPackage.packageManager = 'pnpm@12.15.0';
+          fs.writeFileSync(rootPackagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+          fs.writeFileSync(
+            path.join(ws.root, 'pnpm-workspace.yaml'),
+            [
+              'configDependencies:',
+              "  '@test/policy': 1.0.0",
+              'include:',
+              "  '@test/policy': [overrides]",
+              '',
+            ].join('\n'),
+          );
+          const dependencyPath = path.join(ws.root, 'node_modules', '@test', 'policy');
+          fs.mkdirSync(dependencyPath, { recursive: true });
+          fs.writeFileSync(
+            path.join(dependencyPath, 'package.json'),
+            JSON.stringify({
+              name: '@test/policy',
+              version: '1.0.0',
+              pnpm: { config: './config.yaml' },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(dependencyPath, 'config.yaml'),
+            'overrides:\n  lodash: 4.17.21\n',
+          );
+          const sentinelPath = path.join(ws.root, 'node_modules', 'keep-me.txt');
+          fs.writeFileSync(sentinelPath, 'preserve');
+
+          await expect(
+            refreshDeps({
+              path: ws.root,
+              force: true,
+              logger: silentLogger,
+              summary: false,
+            }),
+          ).rejects.toThrow(/owned by config dependency '@test\/policy'/);
+
+          expect(fs.readFileSync(sentinelPath, 'utf8')).toBe('preserve');
+        });
+
+        it('REQ-INT-PNPM12-006: bumps package.json5 and package.yaml dependencies in place', async () => {
+          ws = setupRealWorkspace('v12-manifest-formats');
+
+          const result = await refreshDeps({
+            path: ws.root,
+            force: true,
+            logger: silentLogger,
+            summary: false,
+          });
+
+          expect(result.canceled).toBe(false);
+          const json5Path = path.join(ws.root, 'apps', 'json5-app', 'package.json5');
+          const yamlPath = path.join(ws.root, 'apps', 'yaml-app', 'package.yaml');
+          const json5Text = fs.readFileSync(json5Path, 'utf8');
+          const yamlText = fs.readFileSync(yamlPath, 'utf8');
+          const json5Manifest = JSON5.parse(json5Text) as {
+            name?: string;
+            private?: boolean;
+            dependencies?: Record<string, string>;
+          };
+          const yamlManifest = YAML.parse(yamlText) as {
+            name?: string;
+            private?: boolean;
+            dependencies?: Record<string, string>;
+          };
+
+          expect(json5Manifest.dependencies?.['lodash']).toBeDefined();
+          expect(
+            compareSemver(json5Manifest.dependencies!['lodash']!, '4.17.21'),
+          ).toBeGreaterThanOrEqual(0);
+          expect(json5Manifest.name).toBe('json5-app');
+          expect(json5Manifest.private).toBe(true);
+          expect(json5Text).toContain("name: 'json5-app'");
+          expect(yamlManifest.dependencies?.['lodash']).toBeDefined();
+          expect(
+            compareSemver(yamlManifest.dependencies!['lodash']!, '4.17.21'),
+          ).toBeGreaterThanOrEqual(0);
+          expect(yamlManifest.name).toBe('yaml-app');
+          expect(yamlManifest.private).toBe(true);
+        });
+      },
+    );
   });
 });
 

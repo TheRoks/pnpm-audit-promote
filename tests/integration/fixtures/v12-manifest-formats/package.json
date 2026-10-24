@@ -1,0 +1,6 @@
+{
+  "name": "v12-manifest-formats-root",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@12.15.0"
+}

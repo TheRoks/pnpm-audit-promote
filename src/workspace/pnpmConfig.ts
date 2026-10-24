@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
+import { formatForPath, readPackageManifest } from './packageManifest';
 import { parse as parseYaml } from 'yaml';
+import { resolvePnpmCapabilities, type PnpmCapabilities } from '../pnpmCapabilities';
 
 export interface WorkspacePnpmPin {
   major: number | null;
@@ -10,7 +12,10 @@ export interface WorkspacePnpmPin {
 export function readWorkspacePnpmPin(pkgJsonPath: string): WorkspacePnpmPin {
   let parsed: { packageManager?: unknown; devEngines?: unknown };
   try {
-    parsed = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as typeof parsed;
+    parsed = readPackageManifest(
+      fs.readFileSync(pkgJsonPath, 'utf8'),
+      formatForPath(pkgJsonPath),
+    ) as typeof parsed;
   } catch {
     return { major: null, version: null };
   }
@@ -117,7 +122,10 @@ function extractMajorFromDevEnginesEntry(entry: unknown): number | null {
   }
   return null;
 }
-export function readAuditIgnoreList(yamlContent: string, pnpmVersion?: string | null): Set<string> {
+export function readAuditIgnoreList(
+  yamlContent: string,
+  pnpmTarget?: string | null | PnpmCapabilities,
+): Set<string> {
   if (!yamlContent.trim()) return new Set();
   let parsed: unknown;
   try {
@@ -129,7 +137,8 @@ export function readAuditIgnoreList(yamlContent: string, pnpmVersion?: string | 
   const root = parsed as Record<string, unknown>;
   const ids = new Set<string>();
   const audit = root['audit'];
-  if (supportsCanonicalAuditConfig(pnpmVersion) && audit !== null && typeof audit === 'object') {
+  const capabilities = getPnpmCapabilities(pnpmTarget);
+  if (capabilities.supportsCanonicalAuditConfig && audit !== null && typeof audit === 'object') {
     const canonical = audit as Record<string, unknown>;
     if ('ignore' in canonical) {
       addStringIds(ids, canonical['ignore']);
@@ -140,7 +149,9 @@ export function readAuditIgnoreList(yamlContent: string, pnpmVersion?: string | 
   const auditConfig = root['auditConfig'];
   if (auditConfig === null || typeof auditConfig !== 'object') return ids;
   const cfg = auditConfig as Record<string, unknown>;
-  const legacyKeys = pnpmMajor(pnpmVersion) >= 12 ? ['ignoreGhsas'] : ['ignoreGhsas', 'ignoreCves'];
+  const legacyKeys = capabilities.supportsLegacyIgnoreCves
+    ? ['ignoreGhsas', 'ignoreCves']
+    : ['ignoreGhsas'];
   for (const key of legacyKeys) addStringIds(ids, cfg[key]);
   return ids;
 }
@@ -156,7 +167,10 @@ function addStringIds(ids: Set<string>, list: unknown): void {
  * Parse the target pnpm version's audit threshold from `pnpm-workspace.yaml`.
  * Returns `audit.level` when supported, otherwise the legacy `auditLevel`.
  */
-export function readAuditLevel(yamlContent: string, pnpmVersion?: string | null): string | null {
+export function readAuditLevel(
+  yamlContent: string,
+  pnpmTarget?: string | null | PnpmCapabilities,
+): string | null {
   if (!yamlContent.trim()) return null;
   let parsed: unknown;
   try {
@@ -167,7 +181,8 @@ export function readAuditLevel(yamlContent: string, pnpmVersion?: string | null)
   if (parsed === null || typeof parsed !== 'object') return null;
   const root = parsed as Record<string, unknown>;
   const audit = root['audit'];
-  if (supportsCanonicalAuditConfig(pnpmVersion) && audit !== null && typeof audit === 'object') {
+  const capabilities = getPnpmCapabilities(pnpmTarget);
+  if (capabilities.supportsCanonicalAuditConfig && audit !== null && typeof audit === 'object') {
     const canonicalLevel = (audit as Record<string, unknown>)['level'];
     if (typeof canonicalLevel === 'string') return canonicalLevel;
   }
@@ -175,19 +190,10 @@ export function readAuditLevel(yamlContent: string, pnpmVersion?: string | null)
   return typeof level === 'string' ? level : null;
 }
 
-function supportsCanonicalAuditConfig(version: string | null | undefined): boolean {
-  if (!version) return true;
-  const parsed = /^(?:v)?(\d+)\.(\d+)/.exec(version.trim());
-  if (!parsed) return false;
-  const major = Number.parseInt(parsed[1]!, 10);
-  const minor = Number.parseInt(parsed[2]!, 10);
-  return major >= 12 || (major === 11 && minor >= 16);
-}
-
-function pnpmMajor(version: string | null | undefined): number {
-  if (!version) return 0;
-  const match = /^(?:v)?(\d+)\./.exec(version.trim());
-  return match ? Number.parseInt(match[1]!, 10) : 0;
+function getPnpmCapabilities(target?: string | null | PnpmCapabilities): PnpmCapabilities {
+  return typeof target === 'object' && target !== null
+    ? target
+    : resolvePnpmCapabilities(target ?? null);
 }
 
 /** Parse whether pnpm's install-time auto-dedupe is enabled in workspace YAML. */

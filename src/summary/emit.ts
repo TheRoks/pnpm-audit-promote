@@ -6,6 +6,8 @@ import type { WorkspaceState } from '../workspace';
 import { extractAdvisoriesWithStatus, readCatalogSnapshot, safeReadFile } from './collect';
 import { readAllOverrides } from '../workspaceOverrides';
 import { renderTerminalSummary } from './render';
+import { WorkspaceMutations } from '../workspace/mutations';
+import { formatForPath } from '../workspace/packageManifest';
 import type {
   AdvisorySummary,
   AuditStatus,
@@ -29,7 +31,7 @@ export interface CollectRunSummaryArgs {
   originalCatalog: ReadonlyMap<string, string>;
   originalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
   initialAdvisories: readonly AdvisorySummary[];
-  /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
+  /** Direct-dep bumps applied to workspace package manifests (non-catalog). */
   pkgJsonDepChanges: readonly PackageJsonDepChange[];
   /** Audit fixes dropped by the configured minimumReleaseAge gate. */
   releaseAgeBlockedOverrides?: readonly ReleaseAgeBlockedOverride[];
@@ -43,11 +45,16 @@ export interface CollectRunSummaryArgs {
 export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<RunSummaryData> {
   const { state, pnpm, skipAudit, dryRun } = args;
 
-  const finalYaml =
-    state.yaml.desiredWorkspaceYaml || (dryRun ? '' : state.yaml.readWorkspaceYaml());
-  const finalPjText = safeReadFile(state.rootPackageJson);
+  const finalYaml = state.configuration.readEffectiveYaml();
+  const finalPjText = state.paths.rootPackageManifest
+    ? safeReadFile(state.paths.rootPackageManifest)
+    : null;
   const finalCatalog = readCatalogSnapshot(finalYaml);
-  const finalOverrides = readAllOverrides(finalYaml, finalPjText);
+  const finalOverrides = readAllOverrides(
+    finalYaml,
+    finalPjText,
+    state.paths.rootPackageManifest ? formatForPath(state.paths.rootPackageManifest) : 'json',
+  );
 
   let finalAdvisories: AdvisorySummary[] = [];
   let auditStatus: AuditStatus = skipAudit || dryRun ? 'skipped' : 'failed';
@@ -65,7 +72,7 @@ export async function collectRunSummary(args: CollectRunSummaryArgs): Promise<Ru
   }
 
   return {
-    workspaceRoot: state.workspaceRoot,
+    workspaceRoot: state.paths.workspaceRoot,
     workspaceName: args.workspaceName,
     toolVersion: args.toolVersion,
     durationMs: args.durationMs,
@@ -105,7 +112,7 @@ export function renderRunSummary(summary: RunSummaryData, args: RenderRunSummary
     try {
       const outputPath = resolveSummaryOutputPath(summary.workspaceRoot, summaryFile);
       const plain = renderTerminalSummary(summary, { color: false });
-      fs.writeFileSync(outputPath, plain + '\n', 'utf8');
+      new WorkspaceMutations(summary.workspaceRoot).writeTextFile(outputPath, plain + '\n');
       logger.detail(`Wrote run summary to ${outputPath}.`);
     } catch (e) {
       logger.warn(`Could not write summary to ${summaryFile}: ${(e as Error).message}.`);

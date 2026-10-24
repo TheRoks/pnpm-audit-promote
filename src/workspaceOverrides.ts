@@ -1,3 +1,6 @@
+import type { PackageManifestFormat } from './workspace/packageManifest';
+import { readPackageManifest } from './workspace/packageManifest';
+
 /**
  * Read the `overrides:` block from a workspace yaml string and return a
  * `selector -> value` map.
@@ -22,10 +25,15 @@ export function readWorkspaceOverrides(yaml: string): Map<string, string> {
 }
 
 /** Read `pnpm.overrides` from a package.json text. Tolerant of malformed input. */
-export function readPackageJsonOverrides(jsonText: string): Map<string, string> {
+export function readPackageJsonOverrides(
+  jsonText: string,
+  format: PackageManifestFormat = 'json',
+): Map<string, string> {
   const out = new Map<string, string>();
   try {
-    const parsed = JSON.parse(jsonText) as { pnpm?: { overrides?: Record<string, unknown> } };
+    const parsed = readPackageManifest(jsonText, format) as {
+      pnpm?: { overrides?: Record<string, unknown> };
+    };
     const overrides = parsed?.pnpm?.overrides;
     if (overrides && typeof overrides === 'object') {
       for (const [k, v] of Object.entries(overrides)) {
@@ -42,13 +50,14 @@ export function readPackageJsonOverrides(jsonText: string): Map<string, string> 
 export function readAllOverrides(
   workspaceYaml: string,
   rootPackageJsonText: string | null,
+  format: PackageManifestFormat = 'json',
 ): Map<string, { value: string; source: 'workspace' | 'package.json' }> {
   const out = new Map<string, { value: string; source: 'workspace' | 'package.json' }>();
   for (const [key, value] of readWorkspaceOverrides(workspaceYaml)) {
     out.set(key, { value, source: 'workspace' });
   }
   if (rootPackageJsonText) {
-    for (const [key, value] of readPackageJsonOverrides(rootPackageJsonText)) {
+    for (const [key, value] of readPackageJsonOverrides(rootPackageJsonText, format)) {
       // package.json takes precedence in display when keys collide.
       out.set(key, { value, source: 'package.json' });
     }

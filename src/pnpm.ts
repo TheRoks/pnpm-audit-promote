@@ -31,8 +31,8 @@ export interface PnpmRunner extends PnpmCommandRunner, PnpmCaptureRunner, PnpmVe
 
 /**
  * Parse a pnpm version string (`10.33.0`, `11.0.0-rc.1`, `12.0.0`, ...) into its major
- * component. Returns `null` when the input cannot be interpreted, which the
- * caller should treat as "pnpm 10 (legacy) behavior".
+ * component. Returns `null` when the input cannot be interpreted; callers
+ * should use the explicit unknown-version capability profile in that case.
  */
 export function getPnpmMajor(version: string): number | null {
   const trimmed = version.trim();

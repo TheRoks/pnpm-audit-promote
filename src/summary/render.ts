@@ -143,11 +143,11 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
   }
   out.push('');
 
-  // Direct (package.json) bumps
-  out.push(`  ${c.bold('Direct dependencies (package.json files)')}`);
+  // Direct package-manifest bumps
+  out.push(`  ${c.bold('Direct dependencies (package manifests)')}`);
   out.push(`  ${rule}`);
   if (pkgJsonChanges.length === 0) {
-    out.push(`  ${c.dim('No package.json versions changed.')}`);
+    out.push(`  ${c.dim('No package manifest versions changed.')}`);
   } else {
     // Collapse per-file entries: one row per package name, highest after-version.
     const collapsed = new Map<string, PackageJsonDepChange>();
@@ -188,7 +188,7 @@ export function renderTerminalSummary(data: RunSummaryData, options: RenderOptio
       ),
     );
     for (const o of overrideChanges) {
-      const src = o.source === 'workspace' ? 'pnpm-workspace.yaml' : 'package.json';
+      const src = o.source === 'workspace' ? 'pnpm-workspace.yaml' : 'package manifest';
       if (o.kind === 'removed') {
         const wasNote = c.dim(` (was ${o.before ?? ''})`);
         out.push(

@@ -3,6 +3,8 @@ import { applyCatalogUpdates, readCatalog } from '../catalog';
 import { findMatchingBrace } from '../jsonEdit';
 import { compareSemVer, getBarePackageName, isPlainPackageName } from '../semverUtil';
 import { collapseRedundantQualifiedPackageJsonOverrides } from './overrideCollapse';
+import type { PackageManifestFormat } from '../workspace/packageManifest';
+import { readPackageManifest, removeManifestProperty } from '../workspace/packageManifest';
 
 export interface PackageJsonOverridePromotionPlan {
   packageJsonText: string;
@@ -10,6 +12,128 @@ export interface PackageJsonOverridePromotionPlan {
   changed: boolean;
   promotions: ReadonlyMap<string, string>;
   diagnostics: string[];
+}
+
+/** Use the same promotion policy for pnpm's JSON5 and YAML package manifests. */
+export function planPackageManifestOverridesIntoCatalog(
+  manifestText: string,
+  format: PackageManifestFormat,
+  desiredYaml: string,
+): PackageJsonOverridePromotionPlan {
+  if (format === 'json') return planPackageJsonOverridesIntoCatalog(manifestText, desiredYaml);
+  const unchanged = (diagnostics: string[] = []): PackageJsonOverridePromotionPlan => ({
+    packageJsonText: manifestText,
+    yaml: desiredYaml,
+    changed: false,
+    promotions: new Map(),
+    diagnostics,
+  });
+
+  let manifest: unknown;
+  try {
+    manifest = readPackageManifest(manifestText, format);
+  } catch {
+    return unchanged([
+      `Could not parse the root ${format} package manifest; skipped override promotion.`,
+    ]);
+  }
+  if (!isRecord(manifest)) return unchanged();
+  const pnpm = isRecord(manifest['pnpm']) ? manifest['pnpm'] : null;
+  const overrides = pnpm && isRecord(pnpm['overrides']) ? pnpm['overrides'] : null;
+  if (!overrides) return unchanged();
+
+  const { names: catalogNames, versions: catalogVersions } = readCatalog(desiredYaml);
+  const promotions = new Map<string, string>();
+  let skippedPlainForCatalog = 0;
+  for (const [key, rawValue] of Object.entries(overrides)) {
+    if (typeof rawValue !== 'string') continue;
+    const bare = getBarePackageName(key);
+    if (!catalogNames.has(bare)) continue;
+    if (isPlainPackageName(key)) {
+      skippedPlainForCatalog++;
+      continue;
+    }
+    const keyRange = key.slice(bare.length + 1);
+    const catalogVersion = catalogVersions.get(bare);
+    const coercedCatalog = catalogVersion ? semver.coerce(catalogVersion)?.version : undefined;
+    if (
+      !coercedCatalog ||
+      !semver.validRange(keyRange) ||
+      !semver.satisfies(coercedCatalog, keyRange)
+    ) {
+      continue;
+    }
+    const minimum = semver.minVersion(rawValue);
+    if (!minimum) continue;
+    const existing = promotions.get(bare);
+    const base = existing ?? catalogVersion ?? '';
+    if (!base || compareSemVer(minimum.version, base) > 0) {
+      promotions.set(bare, semver.valid(rawValue) ? minimum.version : rawValue);
+    }
+  }
+
+  if (promotions.size === 0) {
+    return unchanged(
+      skippedPlainForCatalog > 0
+        ? [
+            `Skipped ${skippedPlainForCatalog} plain package manifest override(s) for catalog packages because they do not include a vulnerable selector range.`,
+          ]
+        : [],
+    );
+  }
+
+  let packageJsonText = manifestText;
+  for (const key of Object.keys(overrides)) {
+    const bare = getBarePackageName(key);
+    if (!promotions.has(bare) || isPlainPackageName(key)) continue;
+    const keyRange = key.slice(bare.length + 1);
+    const catalogVersion = catalogVersions.get(bare);
+    const promoted = promotions.get(bare);
+    const coercedCatalog = catalogVersion ? semver.coerce(catalogVersion)?.version : undefined;
+    if (
+      typeof promoted === 'string' &&
+      coercedCatalog &&
+      semver.validRange(keyRange) &&
+      semver.satisfies(coercedCatalog, keyRange) &&
+      semver.minVersion(String(overrides[key])) &&
+      compareSemVer(semver.minVersion(String(overrides[key]))!.version, catalogVersion ?? '') > 0
+    ) {
+      packageJsonText = removeManifestProperty(packageJsonText, format, 'pnpm', 'overrides', key);
+    }
+  }
+
+  let reparsed: unknown;
+  try {
+    reparsed = readPackageManifest(packageJsonText, format);
+  } catch {
+    return unchanged(['Could not validate edited package manifest; skipped override promotion.']);
+  }
+  const updatedPnpm = isRecord(reparsed) && isRecord(reparsed['pnpm']) ? reparsed['pnpm'] : null;
+  const remaining =
+    updatedPnpm && isRecord(updatedPnpm['overrides']) ? updatedPnpm['overrides'] : null;
+  if (updatedPnpm && remaining && Object.keys(remaining).length === 0) {
+    packageJsonText = removeManifestProperty(packageJsonText, format, 'pnpm', 'overrides');
+  }
+  if (updatedPnpm && Object.keys(updatedPnpm).length === 0) {
+    packageJsonText = removeManifestProperty(packageJsonText, format, 'pnpm');
+  }
+
+  return {
+    packageJsonText,
+    yaml: applyCatalogUpdates(desiredYaml, promotions),
+    changed: packageJsonText !== manifestText || promotions.size > 0,
+    promotions,
+    diagnostics:
+      skippedPlainForCatalog > 0
+        ? [
+            `Skipped ${skippedPlainForCatalog} plain package manifest override(s) for catalog packages because they do not include a vulnerable selector range.`,
+          ]
+        : [],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /** Pure package.json and catalog transformation for direct override promotion. */

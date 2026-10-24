@@ -11,13 +11,13 @@
  * A directory qualifies as a workspace root when it contains either:
  *   - `pnpm-workspace.yaml`, or
  *   - `pnpm-lock.yaml`, or
- *   - `package.json` whose `packageManager` field starts with `pnpm@`, or
- *   - `package.json` with a `pnpm` config object (e.g. `pnpm.overrides`).
+ *   - the effective package manifest whose `packageManager` field starts with `pnpm@`, or
+ *   - the effective package manifest with a `pnpm` config object (e.g. `pnpm.overrides`).
  */
 export class WorkspaceNotFoundError extends Error {
   constructor(public readonly workspaceRoot: string) {
     super(
-      `No pnpm workspace found at '${workspaceRoot}'. Expected pnpm-workspace.yaml, pnpm-lock.yaml, or package.json with "packageManager": "pnpm@..." or a "pnpm" config field. Pass --path <workspace root>.`,
+      `No pnpm workspace found at '${workspaceRoot}'. Expected pnpm-workspace.yaml, pnpm-lock.yaml, or an effective package manifest (package.json, package.json5, or package.yaml) with "packageManager": "pnpm@..." or a "pnpm" config field. Pass --path <workspace root>.`,
     );
     this.name = 'WorkspaceNotFoundError';
   }

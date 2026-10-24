@@ -3,7 +3,12 @@ import { parseDocument } from 'yaml';
 import type { Logger } from '../logger';
 import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
 import { readWorkspaceOverrides } from '../workspaceOverrides';
-import { setJsonProperty } from '../jsonEdit';
+import {
+  formatForPath,
+  readPackageManifest,
+  serializePackageManifest,
+  setManifestProperty,
+} from '../workspace/packageManifest';
 
 /**
  * Move the `overrides:` block from `pnpm-workspace.yaml` into the root
@@ -49,9 +54,10 @@ export function migrateYamlOverridesToPackageJson(
   if (!fs.existsSync(pjPath)) return false;
 
   const pjText = fs.readFileSync(pjPath, 'utf8');
+  const format = formatForPath(pjPath);
   let parsed: { pnpm?: { overrides?: Record<string, unknown> } };
   try {
-    parsed = JSON.parse(pjText) as typeof parsed;
+    parsed = readPackageManifest(pjText, format) as typeof parsed;
   } catch {
     logger.warn(
       'Could not parse root package.json — skipping migration of yaml overrides to pnpm.overrides.',
@@ -65,12 +71,18 @@ export function migrateYamlOverridesToPackageJson(
   }
 
   // Rewrite package.json
-  let newPj = setJsonProperty(pjText, merged, 'pnpm', 'overrides');
+  let newPj = setManifestProperty(pjText, format, merged, 'pnpm', 'overrides');
   if (newPj === pjText) {
     // Either nothing actually changed (already in sync) or the editor failed
     // to apply the edit. Fall back to a structured re-serialize.
     parsed.pnpm = { ...(parsed.pnpm ?? {}), overrides: merged };
-    newPj = JSON.stringify(parsed, null, 2) + (pjText.endsWith('\n') ? '\n' : '');
+    const root = readPackageManifest(pjText, format) as Record<string, unknown>;
+    const existingPnpm = root['pnpm'];
+    root['pnpm'] = {
+      ...(existingPnpm !== null && typeof existingPnpm === 'object' ? existingPnpm : {}),
+      overrides: merged,
+    };
+    newPj = serializePackageManifest(root, format, pjText);
   }
 
   // Strip overrides from yaml document so we don't double-apply on a
@@ -92,7 +104,7 @@ export function migrateYamlOverridesToPackageJson(
     return true;
   }
 
-  fs.writeFileSync(pjPath, newPj, 'utf8');
+  yaml.mutations.writeTextFile(pjPath, newPj);
 
   if (yamlBecameEmpty && yamlWasCreatedMidRun) {
     yaml.removeWorkspaceYaml();

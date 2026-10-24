@@ -12,15 +12,11 @@ export async function runAndRestore(
 ): Promise<void> {
   await runWithBuildApproval(pnpm, state, logger, args);
 
-  if (state.yaml.refreshHasWorkspaceYaml()) {
-    logger.detail(`Detected pnpm-workspace.yaml created by pnpm ${args[0]}.`);
-  }
-  if (state.yaml.restoreWorkspaceYaml(logger)) {
+  state.configuration.refreshRootWorkspaceYaml(logger, `pnpm ${args[0]}`);
+  if (state.configuration.restoreWorkspaceYaml(logger)) {
     await runWithBuildApproval(pnpm, state, logger, [...INSTALL_ARGS]);
-    if (state.yaml.refreshHasWorkspaceYaml()) {
-      logger.detail('Detected pnpm-workspace.yaml created by pnpm install.');
-    }
-    state.yaml.restoreWorkspaceYaml(logger);
+    state.configuration.refreshRootWorkspaceYaml(logger, 'pnpm install');
+    state.configuration.restoreWorkspaceYaml(logger);
   }
 }
 
@@ -50,15 +46,12 @@ async function runWithBuildApproval(
     }
     logger.warn('pnpm requires a build-script decision. Opening pnpm approve-builds...');
     await pnpm.runInteractive(['approve-builds']);
-    state.yaml.refreshHasWorkspaceYaml();
-    state.yaml.preserveApprovedBuilds(logger);
+    state.configuration.refreshRootWorkspaceYaml(logger, 'pnpm approve-builds');
+    state.configuration.preserveApprovedBuilds(logger);
     await pnpm.run(args);
   }
 }
 export function reconcileAfterAuditRead(state: WorkspaceState, logger: Logger): void {
-  if (state.yaml.refreshHasWorkspaceYaml()) {
-    logger.detail('Detected pnpm-workspace.yaml created by pnpm audit.');
-  }
-  state.yaml.preserveAuditIgnorePrune(state.pnpmMajor, logger);
-  state.yaml.restoreWorkspaceYaml(logger);
+  state.configuration.refreshRootWorkspaceYaml(logger, 'pnpm audit');
+  state.configuration.reconcileAfterAuditRead(state.pnpmCapabilities, logger);
 }

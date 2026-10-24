@@ -17,7 +17,8 @@ export async function runInstallAndDedupe(
 
   progressLogger.step('Deduplicate dependency graph');
   const autoDedupeEnabled =
-    (state.pnpmMajor ?? 0) >= 12 && readAutoDedupe(state.yaml.desiredWorkspaceYaml);
+    state.pnpmCapabilities.supportsAutoDedupe &&
+    readAutoDedupe(state.configuration.readEffectiveYaml());
   if (!opts.skipDedupe && !autoDedupeEnabled) {
     await runAndRestore(pnpm, state, logger, ['dedupe']);
   } else if (autoDedupeEnabled && !opts.skipDedupe) {

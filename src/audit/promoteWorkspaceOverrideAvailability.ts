@@ -18,6 +18,7 @@ export async function guardWorkspaceOverrideAvailability(
     string,
     { value: string; source: 'workspace' | 'package.json' }
   > = new Map(),
+  catalog?: { names: ReadonlySet<string>; versions: ReadonlyMap<string, string> },
 ): Promise<void> {
   if (!yaml.hasWorkspaceYaml) return;
   const current = yaml.readWorkspaceYaml();
@@ -40,6 +41,7 @@ export async function guardWorkspaceOverrideAvailability(
   await Promise.all([...names].map((name) => getAvailableVersions(pnpm, name, versionCache)));
   const plan = planWorkspaceOverrideAvailability({
     yaml: current,
+    catalog,
     availableVersions: versionCache,
     baselineSafeVersions,
     originalOverrides,

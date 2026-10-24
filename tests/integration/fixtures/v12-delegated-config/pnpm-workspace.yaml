@@ -1,0 +1,6 @@
+# Include ownership is asserted by the integration test against pnpm 12.15.
+include:
+  ./config/packages.yaml: [packages]
+  ./config/catalog.yaml: [catalog]
+  ./config/policy.yaml: [audit, minimumReleaseAge, minimumReleaseAgeExclude, overrides]
+  ./config/install.yaml: [autoDedupe]

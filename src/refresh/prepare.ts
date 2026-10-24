@@ -61,9 +61,10 @@ export async function prepareRun(options: RefreshOptions): Promise<PreparedRun> 
   // that will actually execute commands inside `--path`. Corepack (and any
   // wrapper that respects `packageManager` / `devEngines.packageManager`)
   // selects the target's pin instead. We mirror that: read the workspace
-  // package.json first and only fall back to `pnpm --version` when no pin
-  // is declared. Failures degrade gracefully — the run gets an explicit
-  // unknown-version capability profile with documented fallback behavior.
+  // package.json first. If the pin declares only a major (for example, a
+  // semver range), resolve the exact target version through the runner when
+  // its reported major agrees with the workspace pin. Failures degrade
+  // gracefully — the run keeps the best-known capability profile.
   let major: number | null = null;
   let version: string | null = null;
   let source = 'unknown';
@@ -77,14 +78,17 @@ export async function prepareRun(options: RefreshOptions): Promise<PreparedRun> 
   } catch {
     // ignore — fall through to PATH lookup
   }
-  if (major === null) {
+  if (major === null || version === null) {
     try {
       const versionText = await pnpm.version();
-      major = getPnpmMajor(versionText);
-      version = versionText || null;
-      source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
+      const resolvedMajor = getPnpmMajor(versionText);
+      if (major === null || resolvedMajor === major) {
+        major = resolvedMajor;
+        version = versionText || null;
+        source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
+      }
     } catch {
-      // leave major as null
+      // Keep the detected workspace-pin major and its fallback profile.
     }
   }
   state.recordPnpm(major, version);

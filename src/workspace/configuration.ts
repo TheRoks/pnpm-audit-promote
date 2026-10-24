@@ -8,7 +8,7 @@ import { WorkspaceReadError } from '../errors';
 import { applyCatalogUpdates, readCatalog } from '../catalog';
 import type { WorkspaceMutations } from './mutations';
 import { WorkspaceYamlSnapshot } from './yamlSnapshot';
-import { normalizeRange } from '../semverUtil';
+import { getBarePackageName, normalizeRange } from '../semverUtil';
 
 type ConfigMap = Record<string, unknown>;
 type OwnerKind = 'root' | 'local' | 'configDependency';
@@ -294,6 +294,10 @@ export class WorkspaceConfiguration {
     advisories: readonly { module_name?: string; vulnerable_versions?: string }[],
     originalCatalog: ReadonlyMap<string, string>,
     auditKnown: boolean,
+    originalOverrides: ReadonlyMap<
+      string,
+      { value: string; source: 'workspace' | 'package.json' }
+    > = new Map(),
   ): void {
     if (!this.enabled) return;
     const owned = new Map<string, string>();
@@ -321,6 +325,19 @@ export class WorkspaceConfiguration {
         .map((advisory) => advisory.module_name ?? '')
         .filter((name) => originalCatalog.has(name)),
     );
+    // Cleanup removes all existing overrides after this check. If an override
+    // permits versions outside a catalog's range, it may be the only reason a
+    // vulnerable catalog version is absent from the initial audit.
+    for (const [selector, override] of originalOverrides) {
+      const packageName = getBarePackageName(selector);
+      const catalogVersion = originalCatalog.get(packageName);
+      if (
+        catalogVersion === undefined ||
+        catalogRangeContainsOverride(catalogVersion, override.value)
+      )
+        continue;
+      catalogModules.add(packageName);
+    }
     if (catalogModules.size > 0 || !auditKnown) {
       const configDependencyCatalog = this.sources.find(
         (source) =>
@@ -405,6 +422,15 @@ export class WorkspaceConfiguration {
       }
     }
   }
+}
+
+function catalogRangeContainsOverride(catalogSpec: string, overrideSpec: string): boolean {
+  if (catalogSpec === overrideSpec) return true;
+  const catalogRange = semver.validRange(catalogSpec);
+  const overrideRange = semver.validRange(overrideSpec);
+  return (
+    catalogRange !== null && overrideRange !== null && semver.subset(overrideRange, catalogRange)
+  );
 }
 
 function normalizeCatalogSetting(setting: string): string {

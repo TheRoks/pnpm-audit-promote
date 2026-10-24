@@ -34,6 +34,7 @@ export async function runRefresh(options: RefreshOptions): Promise<RefreshResult
         : [],
       initial.originalCatalog,
       initial.preCleanupAudit?.complete ?? false,
+      initial.originalOverrides,
     );
   }
 

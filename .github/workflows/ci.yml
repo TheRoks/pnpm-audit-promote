@@ -70,8 +70,8 @@ jobs:
   # Real-pnpm integration tests under tests/integration/. Gated by
   # RUN_INTEGRATION=1 (see scripts/run-integration.mjs). Uses fixtures with
   # a pinned-vulnerable lodash@4.17.20 to exercise the full audit + promote
-  # flow against pnpm 10, 11, and 12. pnpm 12 also runs on macOS and Windows
-  # to cover its native executables across supported CI platforms.
+  # flow against pnpm 10, 11, and 12. The latest pnpm 12 row covers delegated
+  # workspace settings; pnpm 12 also runs on macOS and Windows for native builds.
   integration:
     name: Integration (pnpm ${{ matrix.pnpm-major }})
     strategy:
@@ -87,6 +87,9 @@ jobs:
           - os: ubuntu-latest
             pnpm-major: 12
             pnpm-version: 12.8.1
+          - os: ubuntu-latest
+            pnpm-major: 12
+            pnpm-version: 12.15.0
           - os: macos-latest
             pnpm-major: 12
             pnpm-version: 12.8.1

@@ -188,11 +188,14 @@ describe('cleanup helpers', () => {
     fs.writeFileSync(outsideLock, 'lockfileVersion: 9.0\n', 'utf8');
     // Force the state to point at a lockfile outside the workspace root,
     // simulating a misuse / path-traversal attempt.
-    Object.defineProperty(state, 'lockFile', { value: outsideLock, configurable: true });
+    const unsafeState = {
+      ...state,
+      paths: { ...state.paths, lockFile: outsideLock },
+    };
     const logger = createLogger({ color: false });
 
     try {
-      expect(() => removePnpmLockFile(state, logger)).toThrow(/Refusing to delete/);
+      expect(() => removePnpmLockFile(unsafeState, logger)).toThrow(/Refusing to mutate/);
       expect(fs.existsSync(outsideLock)).toBe(true);
     } finally {
       fs.rmSync(outsideDir, { recursive: true, force: true });

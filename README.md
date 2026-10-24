@@ -29,6 +29,7 @@ every workspace package picks it up consistently. This tool runs the audit
 flow and then reconciles overrides back into the catalog.
 
 [pnpm-catalogs]: https://pnpm.io/catalogs
+[pnpm-config-includes]: https://pnpm.io/config-includes
 
 ## Install
 
@@ -42,7 +43,8 @@ npx pnpm-audit-promote
 ```
 
 Requires Node.js >= 22 and `pnpm` (10, 11, or 12) available on `PATH`.
-Running pnpm 12 itself requires Node.js >= 22.13.0.
+Running pnpm 12.15 through Node.js requires Node.js >= 22.13.0; pnpm's native
+executables do not require Node.js after installation.
 
 ### pnpm 11 notes
 
@@ -50,11 +52,20 @@ Running pnpm 12 itself requires Node.js >= 22.13.0.
 
 - It never adds or modifies the `minimumReleaseAgeExclude` block in `pnpm-workspace.yaml`. Your release-age configuration — both the global `minimumReleaseAge` gate and any existing `minimumReleaseAgeExclude` entries — is preserved verbatim across the run. As a result, a freshly-published advisory-fix version (published less than `minimumReleaseAge` ago) may be blocked by pnpm 11's release-age gate; add it to `minimumReleaseAgeExclude` yourself if you want to allow it. When such a fix cannot satisfy your gate, the tool drops that override before the reinstall (instead of expanding your exclude list) so the install keeps working — re-run once the patch matures. Disable this with `--no-release-age-check`.
 
-`pnpm.overrides` defined in `package.json` are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
+`pnpm.overrides` defined in the effective root package manifest are still migrated into the catalog, even though pnpm 11 itself no longer reads them — the migration is the whole point of running this tool. `devEngines.packageManager: pnpm@11.x` is recognized as a pnpm workspace signal alongside the legacy `packageManager` field.
 
 ### pnpm 12 notes
 
 pnpm 12 is supported while pnpm 10 and 11 remain supported. The default audit strategy stays `pnpm audit --fix override`, so eligible fixes can be promoted into catalogs. pnpm 12's `audit.ignore` and `audit.level` settings are read when selecting direct-dependency bumps; legacy settings are honored according to the target pnpm version. If pnpm 12.7 or newer creates `pnpm-workspace.yaml` from the root `package.json` `workspaces` field during install, the tool adopts that generated file for the rest of the run. With pnpm 12 and `autoDedupe: true`, the explicit `pnpm dedupe` step is skipped because install performs deduplication.
+
+pnpm 12.15 can [delegate workspace settings][pnpm-config-includes] through `pnpm-workspace.yaml`'s
+`include` mapping. The tool reads delegated audit/release-age policy and
+catalogs, writes catalog and override changes to their owning local YAML file,
+and snapshots included files for recovery. Settings owned by a config
+dependency are read-only; if audit fixes may need to change one, the run stops
+before cleanup with guidance. Root and workspace package manifests may use
+`package.json`, `package.json5`, or `package.yaml`; when more than one exists,
+pnpm's precedence is `package.json`, then `package.json5`, then `package.yaml`.
 
 For pnpm 12, `audit.ignore` takes precedence over `auditConfig.ignoreGhsas`; pnpm 12 no longer recognizes the legacy `auditConfig.ignoreCves` setting. The example workspace at [`examples/pnpm12`](./examples/pnpm12/) shows the canonical audit settings and `autoDedupe` option.
 
@@ -64,11 +75,11 @@ The target directory qualifies as a workspace root when **any** of the following
 
 - `pnpm-workspace.yaml`, or
 - `pnpm-lock.yaml`, or
-- `package.json` whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"` or `"pnpm@11.0.0"`), or
-- `package.json` whose `devEngines.packageManager` names pnpm (string form `"pnpm@11.x"` or object form `{ "name": "pnpm" }`; the format pnpm 11's `pnpm init` writes), or
-- `package.json` with a `pnpm` config object (e.g. a bare `pnpm.overrides`).
+- the effective root package manifest (`package.json`, `package.json5`, or `package.yaml`) whose `packageManager` field starts with `pnpm@` (e.g. `"pnpm@10.0.0"` or `"pnpm@11.0.0"`), or
+- the effective root package manifest whose `devEngines.packageManager` names pnpm (string form `"pnpm@11.x"` or object form `{ "name": "pnpm" }`; the format pnpm 11's `pnpm init` writes), or
+- the effective root package manifest with a `pnpm` config object (e.g. a bare `pnpm.overrides`).
 
-When `pnpm-workspace.yaml` is absent, the tool still runs the lockfile / `node_modules` cleanup, strips `pnpm.overrides` from `package.json`, and runs `pnpm install` and `pnpm audit --fix`. Catalog promotion steps are skipped because pnpm catalogs only live in `pnpm-workspace.yaml`.
+When `pnpm-workspace.yaml` is absent, the tool still runs the lockfile / `node_modules` cleanup, strips `pnpm.overrides` from the effective root package manifest, and runs `pnpm install` and `pnpm audit --fix`. Catalog promotion steps are skipped because pnpm catalogs only live in `pnpm-workspace.yaml` or its included settings files.
 
 If an **enclosing** `pnpm-workspace.yaml` is found in any parent directory, the tool refuses to run by default and throws `EnclosingWorkspaceError`. This prevents `pnpm install` from silently walking up and mutating the parent monorepo's lockfile and `pnpm-workspace.yaml`. To proceed, either re-run with `--path <enclosing workspace root>` to operate on the parent, or pass `--ignore-workspace` to keep all operations local to `--path`.
 
@@ -116,22 +127,25 @@ A minimal end-to-end fixture lives under [`examples/basic`](./examples/basic/) �
 
 ## What it does (in order)
 
-1. Remove `pnpm-lock.yaml`
-2. Remove every `node_modules` folder under the workspace
-3. Strip the `overrides:` block from `pnpm-workspace.yaml`
-4. Strip `pnpm.overrides` from every `package.json`
-5. `pnpm install`
-6. `pnpm dedupe` (skip with `--no-dedupe`)
-7. Pre-audit catalog bump for direct-dep vulnerabilities
-8. `pnpm audit --fix` (transitive vulnerabilities)
-9. Promote any catalog-eligible audit overrides back into the catalog
-10. `pnpm install`
-11. `pnpm dedupe` (skip with `--no-dedupe`)
+1. Ask for confirmation, then snapshot the lockfile, workspace YAML, and in-scope package manifests.
+2. Capture the initial advisory state before removing existing overrides.
+3. Remove the lockfile and `node_modules`, then strip workspace and package-manifest overrides.
+4. Run `pnpm install` and optional `pnpm dedupe`.
+5. When audit is enabled, plan direct-dependency fixes from the post-cleanup audit. Apply safe catalog and package-manifest bumps, then reinstall if they changed.
+6. Run `pnpm audit --fix`, validate generated overrides against published versions and release-age settings, and promote catalog-eligible fixes.
+7. Reinstall and optionally dedupe the post-audit dependency graph.
+8. Capture the final audit state and return or render the run summary.
 
 After pnpm commands the tool re-applies the _desired_ `pnpm-workspace.yaml`
 when pnpm rewrites it, preserving user settings and catalog changes. If pnpm
 12.7+ creates the file from `package.json` `workspaces`, that new file becomes
 the desired workspace configuration.
+
+If a phase fails after the initial snapshot, the tool restores the original
+lockfile, workspace YAML, and in-scope `package.json` files before returning
+the error. It keeps build-script decisions recorded through `pnpm
+approve-builds`. `node_modules` is not restored; run `pnpm install` before
+resuming work.
 
 ### Concrete example
 
@@ -203,20 +217,29 @@ if (result.auditStatus === 'complete') {
 - `initialAdvisories`, `finalAdvisories`, `fixedAdvisories` — the audit-derived vulnerability sets before, after, and the diff.
 - `summary` — the full structured `RunSummaryData` regardless of the `summary` rendering flag (so CI can serialize it).
 
-### Exported surface
+### Public API
 
-`refreshDeps`, `RefreshOptions`, `RefreshResult`, `AuditFixMode`,
-`createLogger`, `consoleLogger`, `silentLogger`, `Logger`, `LogLevel`, `ConsoleLoggerOptions`,
-`WorkspaceState`,
-`createPnpmRunner`, `ensurePnpmAvailable`, `PnpmRunner`, `PnpmOptions`,
-`renderTerminalSummary`, `RenderOptions`,
-`AdvisorySummary`, `AuditStatus`, `CatalogChange`, `OverrideChange`, `RunSummaryData`, `Severity`,
-`ConfirmFn`, `ConfirmContext`,
-`PKG_VERSION`,
-and the typed errors
-`WorkspaceNotFoundError`, `EnclosingWorkspaceError`, `PnpmNotInstalledError`, `PnpmCommandFailedError`, `NonInteractiveConfirmationError`.
+All names exported from the package root are public compatibility surfaces and
+follow the package's semantic-versioning policy.
 
-The `pnpm` option on `RefreshOptions` allows injecting a custom `PnpmRunner` implementation (for tests or advanced integrations). The `confirm` option overrides the default stdin-based destructive-action prompt — useful in CI or when wrapping the tool in another UI.
+The primary integration is `refreshDeps`, with `RefreshOptions`,
+`RefreshResult`, and `AuditFixMode`. Its supported collaborators include
+`Logger`, `LogLevel`, `ConsoleLoggerOptions`, `createLogger`, `consoleLogger`,
+`silentLogger`, `ConfirmFn`, and `ConfirmContext`. Result consumers can use
+`AdvisorySummary`, `AuditStatus`, `CatalogChange`, `OverrideChange`,
+`RunSummaryData`, and `Severity`. Typed errors are
+`WorkspaceNotFoundError`, `EnclosingWorkspaceError`, `PnpmNotInstalledError`,
+`PnpmCommandFailedError`, and `NonInteractiveConfirmationError`.
+
+Lower-level integration exports are `WorkspaceState`, `createPnpmRunner`,
+`ensurePnpmAvailable`, `PnpmRunner`, `PnpmOptions`, `renderTerminalSummary`,
+and `RenderOptions`. They remain public for compatibility; new integrations
+should prefer `refreshDeps` unless they need direct access to these lower-level
+operations. `PKG_VERSION` is package metadata.
+
+The `pnpm` option on `RefreshOptions` accepts a custom `PnpmRunner`, which is
+useful for tests and advanced integrations. The `confirm` option replaces the
+stdin-based prompt for CI or applications with their own confirmation UI.
 
 ## Limitations
 

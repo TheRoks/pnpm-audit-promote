@@ -1,11 +1,19 @@
+import * as fs from 'node:fs';
 import type { Logger } from '../logger';
 import type { PnpmCaptureRunner } from '../pnpm';
 import { readBaselineSafeVersions } from '../audit/baselineSafeVersions';
 import { parsePnpmAuditOutput, type PnpmAuditParseResult } from '../audit/pnpmAudit';
-import { readCatalogSnapshot, safeReadFile, summarizeAuditAdvisories } from '../summary/collect';
+import { readCatalogSnapshot, summarizeAuditAdvisories } from '../summary/collect';
 import { readAllOverrides } from '../workspaceOverrides';
 import type { AdvisorySummary } from '../summary/types';
 import type { WorkspaceState } from '../workspace';
+import { WorkspaceReadError } from '../errors';
+import { resolveWorkspacePackageDirs } from '../workspace/packageScope';
+import {
+  findWorkspacePackageManifests,
+  formatForPath,
+  readPackageManifest,
+} from '../workspace/packageManifest';
 import { reconcileAfterAuditRead } from './commands';
 
 export interface InitialState {
@@ -23,6 +31,8 @@ export interface InitialState {
    */
   preCleanupAudit: PnpmAuditParseResult | null;
   baselineSafeVersions: ReadonlyMap<string, string>;
+  /** Original lockfile, workspace YAML, and in-scope package manifests for failure recovery. */
+  controlFiles: ReadonlyMap<string, string | null>;
 }
 
 export async function captureInitialState(
@@ -33,12 +43,22 @@ export async function captureInitialState(
 ): Promise<InitialState> {
   // Capture the original state BEFORE any cleanup mutates files. Used by
   // the run-summary at the end.
-  const originalYaml = state.yaml.desiredWorkspaceYaml;
-  const originalPjText = safeReadFile(state.rootPackageJson);
-  const originalLockText = safeReadFile(state.lockFile);
+  const controlFiles = captureWorkspaceControlFiles(state);
+  const originalYaml = state.configuration.readEffectiveYaml();
+  const originalPjText = state.paths.rootPackageManifest
+    ? (controlFiles.get(state.paths.rootPackageManifest) ?? null)
+    : null;
+  const originalLockText = controlFiles.get(state.paths.lockFile) ?? null;
   const originalCatalog = readCatalogSnapshot(originalYaml);
-  const originalOverrides = readAllOverrides(originalYaml, originalPjText);
-  const workspaceName = readPackageJsonName(originalPjText);
+  const originalOverrides = readAllOverrides(
+    originalYaml,
+    originalPjText,
+    state.paths.rootPackageManifest ? formatForPath(state.paths.rootPackageManifest) : 'json',
+  );
+  const workspaceName = readPackageManifestName(
+    originalPjText,
+    state.paths.rootPackageManifest ? formatForPath(state.paths.rootPackageManifest) : 'json',
+  );
 
   // Capture the TRUE initial vulnerability state — i.e. the audit result
   // with any existing overrides still applied. If we ran this after the
@@ -76,12 +96,47 @@ export async function captureInitialState(
     initialAdvisories,
     preCleanupAudit,
     baselineSafeVersions: readBaselineSafeVersions(originalLockText, preCleanupAudit),
+    controlFiles,
   };
 }
-function readPackageJsonName(text: string | null): string | undefined {
+
+function captureWorkspaceControlFiles(state: WorkspaceState): ReadonlyMap<string, string | null> {
+  const manifests = new Set(
+    state.paths.rootPackageManifest ? [state.paths.rootPackageManifest] : [],
+  );
+  if (state.isMultiPackageWorkspace) {
+    const packageDirs = resolveWorkspacePackageDirs({
+      paths: state.paths,
+      yaml: state.configuration,
+    });
+    for (const manifest of findWorkspacePackageManifests(state.paths.workspaceRoot, packageDirs)) {
+      manifests.add(manifest.path);
+    }
+  }
+
+  const configPaths = state.configuration.getSnapshots().map((snapshot) => snapshot.path);
+  const paths = new Set([...configPaths, state.paths.lockFile, ...manifests]);
+  const snapshot = new Map<string, string | null>();
+  for (const filePath of paths) {
+    if (!fs.existsSync(filePath)) {
+      snapshot.set(filePath, null);
+      continue;
+    }
+    try {
+      snapshot.set(filePath, fs.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+      throw new WorkspaceReadError(filePath, error);
+    }
+  }
+  return snapshot;
+}
+function readPackageManifestName(
+  text: string | null,
+  format: ReturnType<typeof formatForPath>,
+): string | undefined {
   if (!text) return undefined;
   try {
-    const parsed = JSON.parse(text) as { name?: unknown };
+    const parsed = readPackageManifest(text, format) as { name?: unknown };
     return typeof parsed.name === 'string' ? parsed.name : undefined;
   } catch {
     return undefined;

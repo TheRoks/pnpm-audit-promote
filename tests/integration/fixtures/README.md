@@ -16,6 +16,8 @@ fix:
 | `v11-direct-vuln/`           | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
 | `v12-direct-vuln/`           | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
 | `v12-workspaces-autocreate/` | —                | pnpm 12.7 creates workspace YAML from `workspaces` | —         |
+| `v12-delegated-config/`      | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
+| `v12-manifest-formats/`      | `lodash@4.17.20` | GHSA-35jh-r3h4-6jhm (prototype pollution)          | `4.17.21` |
 
 If the npm registry ever unpublishes one of these versions, refresh the
 fixture with the next stable equivalent — the harness will fail loudly so

@@ -18,6 +18,7 @@ export interface OverrideAvailabilityPlan {
 /** Pure registry-snapshot decision for audit-generated workspace overrides. */
 export function planWorkspaceOverrideAvailability(input: {
   yaml: string;
+  catalog?: { names: ReadonlySet<string>; versions: ReadonlyMap<string, string> };
   availableVersions: ReadonlyMap<string, readonly string[]>;
   baselineSafeVersions?: ReadonlyMap<string, string>;
   originalOverrides?: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
@@ -35,7 +36,7 @@ export function planWorkspaceOverrideAvailability(input: {
   const overridesNode = doc.get('overrides', true);
   if (!isMap(overridesNode)) return { yaml: current, changed: false, diagnostics };
 
-  const { names: catalogNames, versions: catalogVersions } = readCatalog(current);
+  const { names: catalogNames, versions: catalogVersions } = input.catalog ?? readCatalog(current);
   const eligible = new Map<Pair, { name: string; catalogPromotionEligible: boolean }>();
   for (const item of overridesNode.items) {
     const key = isScalar(item.key) ? String(item.key.value) : null;

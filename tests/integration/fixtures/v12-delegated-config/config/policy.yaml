@@ -1,0 +1,10 @@
+minimumReleaseAge: 720
+minimumReleaseAgeExclude:
+  - '@scope/*'
+
+audit:
+  level: high
+  ignorePrune: true
+  ignore: []
+
+overrides: {}

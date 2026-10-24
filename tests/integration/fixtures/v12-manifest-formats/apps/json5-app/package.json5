@@ -1,0 +1,8 @@
+{
+  name: 'json5-app',
+  private: true,
+  version: '0.0.0',
+  dependencies: {
+    lodash: '4.17.20',
+  },
+}

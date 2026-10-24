@@ -1,21 +1,32 @@
 import * as fs from 'node:fs';
-import { parseDocument } from 'yaml';
+import * as path from 'node:path';
 import type { Logger } from '../logger';
-import { preservePrunedAuditIgnore } from '../workspaceYaml';
+import { mergeApprovedBuildSettings, preservePrunedAuditIgnore } from '../workspaceYaml';
+import type { PnpmCapabilities } from '../pnpmCapabilities';
 import { WorkspaceReadError } from '../errors';
 import { restoreMinimumReleaseAgeExclude } from '../releaseAgeExclude';
+import { WorkspaceMutations } from './mutations';
 
 /** Owns the original and desired workspace YAML during one refresh run. */
 export class WorkspaceYamlSnapshot {
   readonly path: string;
+  readonly mutations: WorkspaceMutations;
   hasWorkspaceYaml = false;
   desiredWorkspaceYaml = '';
   yamlEol: '\r\n' | '\n' = '\n';
-  dryRun = false;
   originalWorkspaceYaml = '';
 
-  constructor(path: string) {
+  constructor(path: string, mutations = new WorkspaceMutations(pathFromWorkspaceYaml(path))) {
     this.path = path;
+    this.mutations = mutations;
+  }
+
+  get dryRun(): boolean {
+    return this.mutations.dryRun;
+  }
+
+  set dryRun(value: boolean) {
+    this.mutations.dryRun = value;
   }
 
   initialize(hasWorkspaceYaml: boolean, dryRun: boolean): void {
@@ -47,7 +58,7 @@ export class WorkspaceYamlSnapshot {
 
   saveWorkspaceYaml(content: string): void {
     if (this.dryRun || !this.hasWorkspaceYaml) return;
-    fs.writeFileSync(this.path, content, 'utf8');
+    this.mutations.writeTextFile(this.path, content);
   }
 
   /** Update the in-memory target after adopting an external YAML edit. */
@@ -64,7 +75,7 @@ export class WorkspaceYamlSnapshot {
   removeWorkspaceYaml(): void {
     if (!this.dryRun && this.hasWorkspaceYaml) {
       try {
-        fs.rmSync(this.path, { force: true });
+        this.mutations.removeFileSync(this.path);
       } catch {
         // Best-effort removal matches pnpm-created empty YAML cleanup behavior.
       }
@@ -93,8 +104,8 @@ export class WorkspaceYamlSnapshot {
     logger.detail('Discarded `minimumReleaseAgeExclude` entries written by pnpm audit --fix.');
   }
 
-  preserveAuditIgnorePrune(pnpmMajor: number | null, logger: Logger): void {
-    if ((pnpmMajor ?? 0) < 12 || !this.hasWorkspaceYaml) return;
+  preserveAuditIgnorePrune(capabilities: PnpmCapabilities, logger: Logger): void {
+    if (!capabilities.supportsAuditIgnorePrune || !this.hasWorkspaceYaml) return;
     const current = this.readWorkspaceYaml();
     const updated = preservePrunedAuditIgnore(this.desiredWorkspaceYaml, current);
     if (updated === this.desiredWorkspaceYaml) return;
@@ -104,28 +115,38 @@ export class WorkspaceYamlSnapshot {
 
   preserveApprovedBuilds(logger: Logger): boolean {
     if (!this.hasWorkspaceYaml) return false;
-    const actual = parseDocument(this.readWorkspaceYaml());
-    const desired = parseDocument(this.desiredWorkspaceYaml);
-    if (actual.errors.length > 0 || desired.errors.length > 0) return false;
-
-    let changed = false;
-    for (const key of [
-      'allowBuilds',
-      'permissions',
-      'onlyBuiltDependencies',
-      'ignoredBuiltDependencies',
-      'neverBuiltDependencies',
-    ]) {
-      const current = actual.get(key);
-      if (JSON.stringify(current) === JSON.stringify(desired.get(key))) continue;
-      if (actual.has(key)) desired.set(key, current);
-      else desired.delete(key);
-      changed = true;
-    }
-    if (!changed) return false;
-    this.writeDesiredWorkspaceYaml(desired.toString().replace(/\n/g, this.yamlEol));
+    const updated = mergeApprovedBuildSettings(this.desiredWorkspaceYaml, this.readWorkspaceYaml());
+    if (updated === this.desiredWorkspaceYaml) return false;
+    this.writeDesiredWorkspaceYaml(updated);
     logger.detail('Preserved build-script decisions recorded by pnpm approve-builds.');
     return true;
+  }
+
+  /** Restore the original workspace YAML while retaining explicit build approvals. */
+  restoreInitialWorkspaceYaml(original: string | null, logger: Logger): void {
+    let current: string | null = null;
+    try {
+      if (fs.existsSync(this.path)) current = fs.readFileSync(this.path, 'utf8');
+    } catch (error) {
+      throw new WorkspaceReadError(this.path, error);
+    }
+
+    const content =
+      current === null
+        ? (original ?? '')
+        : mergeApprovedBuildSettings(original ?? '', current, false);
+    const shouldExist = original !== null || content.length > 0;
+    if (shouldExist) {
+      this.mutations.writeTextFile(this.path, content);
+    } else {
+      this.mutations.removeFileSync(this.path);
+    }
+
+    this.hasWorkspaceYaml = shouldExist;
+    this.desiredWorkspaceYaml = shouldExist ? content : '';
+    this.originalWorkspaceYaml = original ?? '';
+    this.detectEol();
+    logger.detail('Restored pnpm-workspace.yaml to its pre-run content.');
   }
 
   restoreWorkspaceYaml(logger: Logger): boolean {
@@ -136,4 +157,8 @@ export class WorkspaceYamlSnapshot {
     this.writeDesiredWorkspaceYaml(this.desiredWorkspaceYaml);
     return true;
   }
+}
+
+function pathFromWorkspaceYaml(filePath: string): string {
+  return path.dirname(filePath);
 }

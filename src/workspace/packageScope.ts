@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import picomatch from 'picomatch';
 import { parse as parseYaml } from 'yaml';
 import { PRUNED_DIR_NAMES } from '../fsWalk';
+import type { WorkspacePaths } from '../workspace';
+import { readPackageManifestFile } from './packageManifest';
 
 /** Extract the `packages:` list from pnpm-workspace.yaml text. */
 function extractYamlPackagesGlobs(yaml: string): string[] | null {
@@ -30,8 +32,7 @@ function extractYamlPackagesGlobs(yaml: string): string[] | null {
  * callers should treat every `package.json` in the tree as in-scope.
  */
 export interface WorkspacePackageScopeSource {
-  workspaceRoot: string;
-  rootPackageJson: string;
+  paths: WorkspacePaths;
   yaml: { readWorkspaceYaml(): string };
 }
 
@@ -50,11 +51,17 @@ export function resolveWorkspacePackageDirs(
   // 2. Root package.json "workspaces" (fallback)
   if (!patterns) {
     try {
-      const pkg = JSON.parse(fs.readFileSync(state.rootPackageJson, 'utf8')) as {
-        workspaces?: unknown;
-      };
-      if (Array.isArray(pkg.workspaces)) {
-        const ws = (pkg.workspaces as unknown[]).filter((x): x is string => typeof x === 'string');
+      const pkg = state.paths.rootPackageManifest
+        ? readPackageManifestFile(state.paths.rootPackageManifest)
+        : null;
+      const workspaces = pkg?.['workspaces'];
+      const workspaceGlobs = Array.isArray(workspaces)
+        ? workspaces
+        : workspaces !== null && typeof workspaces === 'object'
+          ? (workspaces as { packages?: unknown }).packages
+          : null;
+      if (Array.isArray(workspaceGlobs)) {
+        const ws = workspaceGlobs.filter((x): x is string => typeof x === 'string');
         if (ws.length > 0) patterns = ws;
       }
     } catch {
@@ -75,10 +82,10 @@ export function resolveWorkspacePackageDirs(
   const negMatchers = negativeGlobs.map((g) => picomatch(g, { dot: true }));
 
   const result = new Set<string>();
-  result.add(state.workspaceRoot); // root package.json is always in scope
+  result.add(state.paths.workspaceRoot); // root package.json is always in scope
 
   // Index-based loop (O(1) per iteration) avoids the O(n) cost of Array.shift().
-  const queue = [state.workspaceRoot];
+  const queue = [state.paths.workspaceRoot];
   for (let i = 0; i < queue.length; i++) {
     const current = queue[i]!;
     let entries: fs.Dirent[];
@@ -91,7 +98,7 @@ export function resolveWorkspacePackageDirs(
       if (!e.isDirectory()) continue;
       if (PRUNED_DIR_NAMES.has(e.name)) continue;
       const full = path.join(current, e.name);
-      const rel = path.relative(state.workspaceRoot, full).split(path.sep).join('/');
+      const rel = path.relative(state.paths.workspaceRoot, full).split(path.sep).join('/');
       const matched = posMatchers.some((m) => m(rel)) && !negMatchers.some((m) => m(rel));
       if (matched) {
         result.add(full);

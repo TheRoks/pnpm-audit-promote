@@ -17,7 +17,10 @@ export interface WorkspaceOverridePromotionPlan {
   diagnostics: string[];
 }
 
-export function planAuditOverridesIntoCatalog(current: string): WorkspaceOverridePromotionPlan {
+export function planAuditOverridesIntoCatalog(
+  current: string,
+  catalog?: { names: ReadonlySet<string>; versions: ReadonlyMap<string, string> },
+): WorkspaceOverridePromotionPlan {
   const doc = parseWorkspaceDoc(current);
   if (!doc) return { yaml: current, changed: false, promotions: new Map(), diagnostics: [] };
 
@@ -31,9 +34,9 @@ export function planAuditOverridesIntoCatalog(current: string): WorkspaceOverrid
   // useful when pnpm 11 writes many open-ended selectors for the same
   // package via `pnpm audit --fix override`).
   const catalogNode = doc.get('catalog', true);
-  const hasCatalog = isMap(catalogNode);
+  const hasCatalog = isMap(catalogNode) || Boolean(catalog && catalog.names.size > 0);
   const { names: catalogNames, versions: catalogVersions } = hasCatalog
-    ? readCatalog(current)
+    ? (catalog ?? readCatalog(current))
     : { names: new Set<string>(), versions: new Map<string, string>() };
   const updates = new Map<string, string>();
   const keepItems: Pair[] = [];

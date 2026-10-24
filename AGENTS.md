@@ -16,40 +16,62 @@ pnpm install
 
 ```text
 src/
-  cli.ts        — CLI entry point (commander); excluded from coverage
-  index.ts      — public API re-exports; excluded from coverage
-  refresh.ts    — orchestration: the 10-step refreshDeps() flow
-  workspace.ts  — WorkspaceState class (paths + desired-YAML snapshot)
-  catalog.ts    — regex-based pnpm-workspace.yaml manipulation
-  cleanup.ts    — file cleanup (lock, node_modules, overrides)
-  pnpm.ts       — pnpm runner abstraction (real shell-out or injected mock)
-  logger.ts     — Logger interface + consoleLogger / silentLogger
-  progress.ts   — createProgressLogger: numbered step wrapper around Logger
-  prompt.ts     — defaultConfirmDestructive + ConfirmFn injection point
-  errors.ts     — typed error classes (WorkspaceNotFoundError, ...)
-  fsWalk.ts     — filesystem walk utilities (index-based BFS)
-  jsonEdit.ts   — JSONC-aware package.json edits
-  semverUtil.ts — semver helpers
-  summary.ts    — barrel re-export for the summary subsystem
-  summary/
-    types.ts    — RunSummaryData, AdvisorySummary, CatalogChange, OverrideChange
-    collect.ts  — pure data: extractAdvisories, diff*, read*Overrides, safeReadFile
-    render.ts   — renderTerminalSummary (terminal-pretty + plain-text)
-    emit.ts     — capture final state, render, and (optionally) write summary file
-  audit/
-    parseAdvisories.ts          — pnpm audit JSON → direct-dep catalog bumps
-    promoteWorkspaceOverrides.ts — workspace overrides → catalog
-    promotePackageJsonOverrides.ts — package.json pnpm.overrides → catalog
-    overrideCollapse.ts         — selector collapsing helpers
-    bumpReporting.ts            — formatted bump diagnostics
+  cli.ts        — Commander entry point; excluded from coverage
+  index.ts      — public package exports; excluded from coverage
+  refresh.ts    — public refreshDeps re-export
+  refresh/
+    prepare.ts                — workspace setup, pnpm selection, and run context
+    initialState.ts           — pre-cleanup audit and control-file snapshots
+    cleanupPhase.ts           — cleanup ordering
+    install.ts                — install and optional dedupe phase
+    auditPhase.ts              — audit-phase ordering
+    directDependencyPhase.ts  — direct-dependency planning, edits, and reinstall
+    auditFixPhase.ts           — audit fix, validation, and override promotion
+    commands.ts                — pnpm invocation, workspace reconciliation, build approval
+    recovery.ts                — restore control files after a failed refresh
+    runRefresh.ts              — top-level phase orchestration and summary
+  workspace.ts               — WorkspaceState, immutable paths, and per-run workspace state
+  workspace/
+    discovery.ts              — root detection and enclosing-workspace guard
+    packageScope.ts            — workspace package directory resolution
+    packageManifest.ts         — package.json/JSON5/YAML selection, parsing, and edits
+    configuration.ts            — pnpm 12.15 include ownership and delegated-file recovery
+    pnpmConfig.ts               — version-aware pnpm workspace settings
+    yamlSnapshot.ts             — desired YAML snapshot and pnpm reconciliation
+    mutations.ts                — guarded, dry-run-aware atomic file mutations
+  pnpmCapabilities.ts          — target pnpm feature profile and audit command syntax
+  catalog.ts                   — YAML-AST pnpm catalog reads and edits
+  cleanup/                     — lockfile, node_modules, and override cleanup
+  pnpm.ts                      — real pnpm process runner or injected adapter
+  logger.ts                    — Logger interface and console/silent adapters
+  progress.ts                  — numbered step wrapper around Logger
+  prompt.ts                    — destructive-action prompt and ConfirmFn seam
+  errors.ts                    — typed operational errors
+  fsWalk.ts                    — filesystem walk utilities (index-based BFS)
+  jsonEdit.ts                  — formatting-preserving JSONC edits
+  semverUtil.ts                — semver helpers
+  summary/                     — summary data collection, rendering, and output
+  audit/                       — audit parsing, policy planning, registry reads,
+                                override validation, and promotion
 tests/
-  *.test.ts     — Vitest tests; mirror src/ structure
-  audit/        — tests for src/audit/*
+  *.test.ts     — Vitest tests for public and cross-module behavior
+  refresh/      — refresh phase and recovery tests
+  workspace/    — workspace state, mutation, and config tests
+  audit/         — audit policy and promotion tests
+  integration/ — real pnpm 10/11/12 workspace tests
   helpers/      — shared test helpers (e.g. recordingRunner)
 ```
 
-Key design point: `WorkspaceState` is initialized once per run and passed to
-helper modules. `PnpmRunner` is injectable so tests never shell out to real pnpm.
+`runRefresh` owns phase ordering. Audit planning and audit-fix reconciliation
+are separate steps. Program-initiated workspace file changes go through
+`WorkspaceMutations`, which owns dry-run handling, workspace containment, and
+atomic file replacement. `WorkspaceState` keeps an immutable path value beside
+the mutable YAML snapshot; legacy path accessors remain for public compatibility.
+`WorkspaceConfiguration` resolves included setting owners, authorizes only
+explicitly included local YAML paths, and keeps them in failure recovery.
+`PackageManifest` selects the pnpm-preferred package manifest once per package.
+The target pnpm version is resolved once into `PnpmCapabilities`. The public
+`PnpmRunner` remains injectable, so unit tests do not shell out to real pnpm.
 
 ## TypeScript conventions
 

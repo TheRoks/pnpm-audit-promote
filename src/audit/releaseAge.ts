@@ -47,11 +47,12 @@ export async function guardWorkspaceOverrideReleaseAge(
   yaml: WorkspaceYamlSnapshot,
   pnpm: PnpmCaptureRunner,
   logger: Logger,
-  options: { now?: Date } = {},
+  options: { now?: Date; policyYaml?: string } = {},
 ): Promise<BlockedOverride[]> {
   if (!yaml.hasWorkspaceYaml) return [];
   const current = yaml.readWorkspaceYaml();
-  const minutes = readMinimumReleaseAge(current);
+  const policyYaml = options.policyYaml ?? current;
+  const minutes = readMinimumReleaseAge(policyYaml);
   if (minutes === null) return [];
 
   const doc = parseWorkspaceDoc(current);
@@ -59,7 +60,7 @@ export async function guardWorkspaceOverrideReleaseAge(
   const overridesNode = doc.get('overrides', true);
   if (!isMap(overridesNode)) return [];
 
-  const excludeEntries = parseMinimumReleaseAgeExclude(current);
+  const excludeEntries = parseMinimumReleaseAgeExclude(policyYaml);
   const now = options.now ?? new Date();
   const versionsCache = new Map<string, string[]>();
   const timesCache = new Map<string, Map<string, string>>();

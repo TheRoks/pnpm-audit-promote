@@ -20,7 +20,7 @@ export interface CatalogChange {
 }
 
 export interface PackageJsonDepChange {
-  /** Absolute path to the package.json file that was modified. */
+  /** Absolute path to the effective package manifest that was modified. */
   pkgJsonPath: string;
   name: string;
   before: string;
@@ -74,7 +74,7 @@ export interface RunSummaryData {
   finalOverrides: ReadonlyMap<string, { value: string; source: 'workspace' | 'package.json' }>;
   initialAdvisories: readonly AdvisorySummary[];
   finalAdvisories: readonly AdvisorySummary[];
-  /** Direct-dep bumps applied to workspace package.json files (non-catalog). */
+  /** Direct-dep bumps applied to workspace package manifests (non-catalog). */
   pkgJsonDepChanges: readonly PackageJsonDepChange[];
   /** Audit fixes dropped by `minimumReleaseAge`; absent on legacy summaries. */
   releaseAgeBlockedOverrides?: readonly ReleaseAgeBlockedOverride[];

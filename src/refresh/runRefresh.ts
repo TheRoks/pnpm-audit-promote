@@ -13,6 +13,7 @@ import { captureInitialState } from './initialState';
 import { runCleanupPhase } from './cleanupPhase';
 import { runInstallAndDedupe } from './install';
 import { runAuditPhase } from './auditPhase';
+import { restoreWorkspaceControlFiles } from './recovery';
 import type { RefreshOptions, RefreshResult } from './types';
 
 export async function runRefresh(options: RefreshOptions): Promise<RefreshResult> {
@@ -26,72 +27,87 @@ export async function runRefresh(options: RefreshOptions): Promise<RefreshResult
   }
 
   const initial = await captureInitialState(state, pnpm, logger, { skipAudit, dryRun });
-
-  // The tool never adds or modifies `minimumReleaseAgeExclude` in
-  // `pnpm-workspace.yaml` (REQ-PNPM11-011). The user's release-age gate —
-  // including their exclude list — is preserved verbatim across the run.
-
-  await runCleanupPhase(state, progressLogger);
-
-  await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
-    skipDedupe: Boolean(options.skipDedupe),
-    installLabel: 'Install dependencies',
-  });
-
-  let pkgJsonDepChanges: PackageJsonDepChange[] = [];
-  let releaseAgeBlockedOverrides: ReleaseAgeBlockedOverride[] = [];
   if (!skipAudit) {
-    const auditResult = await runAuditPhase(state, pnpm, logger, progressLogger, {
-      skipDedupe: Boolean(options.skipDedupe),
-      allowMajor: options.allowMajor ?? true,
-      releaseAgeCheck: options.releaseAgeCheck ?? true,
-      dryRun,
-      preCleanupAudit: initial.preCleanupAudit,
-      baselineSafeVersions: initial.baselineSafeVersions,
-      originalOverrides: initial.originalOverrides,
-      ignoreWorkspace: options.ignoreWorkspace ?? false,
-      auditFixMode: options.auditFixMode ?? 'override',
-    });
-    pkgJsonDepChanges = auditResult.pkgJsonDepChanges;
-    releaseAgeBlockedOverrides = auditResult.releaseAgeBlockedOverrides;
-  } else {
-    logger.detail('Skipped audit and catalog promotion (--no-audit).');
-  }
-
-  // Always assemble the canonical summary; rendering is conditional.
-  const summary = await collectRunSummary({
-    state,
-    pnpm,
-    skipAudit,
-    dryRun,
-    durationMs: Date.now() - startedAt,
-    toolVersion: pkg.version,
-    workspaceName: initial.workspaceName,
-    originalCatalog: initial.originalCatalog,
-    originalOverrides: initial.originalOverrides,
-    initialAdvisories: initial.initialAdvisories,
-    pkgJsonDepChanges,
-    releaseAgeBlockedOverrides,
-  });
-
-  if (summary.auditStatus === 'failed') {
-    logger.warn(
-      'Final audit verification failed; fixed and remaining vulnerability counts are unknown.',
+    state.configuration.assertAuditSettingsWritable(
+      initial.preCleanupAudit?.complete
+        ? Object.values(initial.preCleanupAudit.audit.advisories)
+        : [],
+      initial.originalCatalog,
+      initial.preCleanupAudit?.complete ?? false,
+      initial.originalOverrides,
     );
   }
 
-  if (options.summary !== false) {
-    renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+  try {
+    // The tool never adds or modifies `minimumReleaseAgeExclude` in
+    // `pnpm-workspace.yaml` (REQ-PNPM11-011). The user's release-age gate —
+    // including their exclude list — is preserved verbatim across the run.
+
+    await runCleanupPhase(state, progressLogger);
+
+    await runInstallAndDedupe(pnpm, state, logger, progressLogger, {
+      skipDedupe: Boolean(options.skipDedupe),
+      installLabel: 'Install dependencies',
+    });
+
+    let pkgJsonDepChanges: PackageJsonDepChange[] = [];
+    let releaseAgeBlockedOverrides: ReleaseAgeBlockedOverride[] = [];
+    if (!skipAudit) {
+      const auditResult = await runAuditPhase(state, pnpm, logger, progressLogger, {
+        skipDedupe: Boolean(options.skipDedupe),
+        allowMajor: options.allowMajor ?? true,
+        releaseAgeCheck: options.releaseAgeCheck ?? true,
+        dryRun,
+        preCleanupAudit: initial.preCleanupAudit,
+        baselineSafeVersions: initial.baselineSafeVersions,
+        originalOverrides: initial.originalOverrides,
+        ignoreWorkspace: options.ignoreWorkspace ?? false,
+        auditFixMode: options.auditFixMode ?? 'override',
+      });
+      pkgJsonDepChanges = auditResult.pkgJsonDepChanges;
+      releaseAgeBlockedOverrides = auditResult.releaseAgeBlockedOverrides;
+    } else {
+      logger.detail('Skipped audit and catalog promotion (--no-audit).');
+    }
+
+    // Always assemble the canonical summary; rendering is conditional.
+    const summary = await collectRunSummary({
+      state,
+      pnpm,
+      skipAudit,
+      dryRun,
+      durationMs: Date.now() - startedAt,
+      toolVersion: pkg.version,
+      workspaceName: initial.workspaceName,
+      originalCatalog: initial.originalCatalog,
+      originalOverrides: initial.originalOverrides,
+      initialAdvisories: initial.initialAdvisories,
+      pkgJsonDepChanges,
+      releaseAgeBlockedOverrides,
+    });
+
+    if (summary.auditStatus === 'failed') {
+      logger.warn(
+        'Final audit verification failed; fixed and remaining vulnerability counts are unknown.',
+      );
+    }
+
+    if (options.summary !== false) {
+      renderRunSummary(summary, { logger, summaryFile: options.summaryFile, dryRun });
+    }
+
+    const totalElapsed = formatDuration(Date.now() - startedAt);
+    logger.success(
+      dryRun
+        ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
+        : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in workspace configuration and package manifest files before committing.`,
+    );
+
+    return summaryToResult(summary);
+  } catch (error) {
+    if (!dryRun) restoreWorkspaceControlFiles(state, initial.controlFiles, logger);
+    throw error;
   }
-
-  const totalElapsed = formatDuration(Date.now() - startedAt);
-  logger.success(
-    dryRun
-      ? `Dry-run complete. No files were modified. Total elapsed: ${totalElapsed}.`
-      : `Execution complete. Total elapsed: ${totalElapsed}. Review the diff in pnpm-workspace.yaml and package.json files before committing.`,
-  );
-
-  return summaryToResult(summary);
 }
 
 function canceledResult(durationMs: number): RefreshResult {

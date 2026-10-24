@@ -1,102 +1,89 @@
-# CLI Process Sequence Diagram
+# Refresh Process Sequence
+
+`runRefresh` owns the order of the refresh phases. Program-initiated file
+changes use `WorkspaceMutations`; pnpm commands remain external process effects
+and are reconciled with the desired workspace YAML snapshot after each call.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant CLI as cli.ts
-    participant Refresh as refreshDeps()
-    participant WS as WorkspaceState
+    participant Refresh as runRefresh()
+    participant State as WorkspaceState
+    participant Files as WorkspaceMutations
     participant Pnpm as PnpmRunner
-    participant Cleanup as cleanup.ts
-    participant Audit as audit/
-    participant Catalog as catalog.ts
-    participant Summary as summary/emit.ts
+    participant Cleanup as cleanup phase
+    participant Audit as audit phases
+    participant Summary as summary
 
     User->>CLI: pnpm-audit-promote [options]
     CLI->>Refresh: refreshDeps(options)
-
-    Refresh->>Pnpm: ensurePnpmAvailable()
-    Refresh->>WS: WorkspaceState.initialize(path)
-    WS-->>Refresh: state (workspace paths + YAML snapshot)
-
-    Refresh->>User: Confirm destructive action?
-    alt User declines
-        Refresh-->>CLI: { canceled: true }
-        CLI-->>User: (exit)
-    end
-
-    Note over Refresh: Capture initial state for summary
-    Refresh->>WS: read pnpm-workspace.yaml snapshot
-    Refresh->>Pnpm: pnpm audit --json (initial vulnerability scan)
-    Pnpm-->>Refresh: initialAdvisories[]
-
-    rect rgba(100, 160, 240, 0.15)
-        Note over Refresh,Cleanup: Cleanup Phase
-        Refresh->>Cleanup: removePnpmLockFile(state)
-        Refresh->>Cleanup: removeNodeModulesFolders(state)
-        Refresh->>Cleanup: removeWorkspaceOverridesBlock(state)
-        Refresh->>Cleanup: removePackageJsonOverrides(state)
-    end
-
-    rect rgba(80, 200, 120, 0.15)
-        Note over Refresh,Pnpm: First Install Phase
-        Refresh->>Pnpm: pnpm install
-        Pnpm-->>Refresh: installed
-        Refresh->>WS: restoreWorkspaceYaml() [if drifted]
-        opt not --no-dedupe
-            Refresh->>Pnpm: pnpm dedupe
+    Refresh->>State: discover workspace and YAML snapshot
+    Refresh->>Pnpm: resolve target pnpm version
+    Pnpm-->>Refresh: version and capabilities
+    Refresh->>User: request destructive-action confirmation
+    alt user declines
+        Refresh-->>CLI: canceled RefreshResult
+    else confirmed
+        Refresh->>Files: snapshot lock, workspace YAML, and scoped package.json files
+        opt audit enabled
+            Refresh->>Pnpm: pnpm audit --json (pre-cleanup baseline)
+            Pnpm-->>Refresh: initial advisory snapshot
         end
-    end
 
-    opt not --no-audit
-        rect rgba(230, 170, 50, 0.15)
-            Note over Refresh,Catalog: Audit Phase
-            Refresh->>Pnpm: pnpm audit --json (post-cleanup scan)
-            Pnpm-->>Refresh: auditJson
-
-            Refresh->>Audit: getDirectDepCatalogBumps(state, auditJson)
-            Note over Audit: parseAdvisories.ts<br/>resolves vulnerable<br/>direct deps → safe versions
-            Audit-->>Refresh: bumps Map<pkg, version>
-
-            opt bumps.size > 0
-                Refresh->>Catalog: applyCatalogUpdates(yaml, bumps)
-                Catalog-->>Refresh: updated YAML
-                Refresh->>WS: saveWorkspaceYaml()
-                Refresh->>Pnpm: pnpm install (post-bump)
-                Refresh->>WS: restoreWorkspaceYaml() [if drifted]
-            end
-
-            Refresh->>Pnpm: pnpm audit --fix
-            Pnpm-->>WS: pnpm-workspace.yaml updated (overrides added)
-
-            Refresh->>Audit: syncAuditOverridesIntoCatalog(state)
-            Note over Audit: promoteWorkspaceOverrides.ts<br/>moves catalog-eligible<br/>workspace overrides → catalog
-            Audit-->>Refresh: updated YAML
-
-            Refresh->>Audit: syncPackageJsonOverridesIntoCatalog(state, yaml)
-            Note over Audit: promotePackageJsonOverrides.ts<br/>moves catalog-eligible<br/>package.json overrides → catalog
-            Audit-->>Refresh: updated YAML
+        rect rgba(100, 160, 240, 0.15)
+            Refresh->>Cleanup: remove lockfile, node_modules, and existing overrides
+            Cleanup->>Files: guarded removals and package.json edits
         end
 
         rect rgba(80, 200, 120, 0.15)
-            Note over Refresh,Pnpm: Second Install Phase
-            Refresh->>Pnpm: pnpm install (post-audit reconciliation)
-            Refresh->>WS: restoreWorkspaceYaml() [if drifted]
-            opt not --no-dedupe
+            Refresh->>Pnpm: pnpm install --no-frozen-lockfile
+            Pnpm-->>State: workspace YAML may be normalized
+            Refresh->>State: reconcile YAML and preserve build approvals
+            opt explicit dedupe needed
                 Refresh->>Pnpm: pnpm dedupe
+                Pnpm-->>State: workspace YAML may be normalized
+                Refresh->>State: reconcile desired YAML
             end
         end
-    end
 
-    rect rgba(170, 120, 240, 0.15)
-        Note over Refresh,Summary: Summary Phase
-        Refresh->>Summary: emitRunSummary(state, initialAdvisories, ...)
-        Summary->>Pnpm: pnpm audit --json (final vulnerability scan)
-        Pnpm-->>Summary: finalAdvisories[]
-        Summary->>Summary: diffCatalog / diffOverrides / diffAdvisories
-        Summary-->>Refresh: RunSummaryData
-    end
+        opt audit enabled
+            rect rgba(230, 170, 50, 0.15)
+                Refresh->>Audit: post-cleanup audit and direct-dependency plan
+                Audit->>Files: apply catalog and package.json updates
+                opt direct dependencies changed
+                    Audit->>Pnpm: pnpm install --no-frozen-lockfile
+                    Pnpm-->>State: workspace YAML may be normalized
+                    Audit->>State: reconcile desired YAML
+                end
+                Audit->>Pnpm: pnpm audit --fix
+                Pnpm-->>State: audit overrides and pnpm settings
+                Audit->>Audit: validate availability and release age
+                Audit->>Audit: promote catalog-eligible overrides
+                opt --ignore-workspace
+                    Audit->>Files: migrate overrides into root package.json
+                end
+                Audit->>Pnpm: post-audit install and optional dedupe
+                Pnpm-->>State: final dependency graph
+                Audit-->>Refresh: direct changes and blocked overrides
+            end
+        end
 
-    Refresh-->>CLI: RefreshResult { catalogChanges, overrideChanges, fixedAdvisories, ... }
-    CLI-->>User: Summary printed to terminal
+        Refresh->>Summary: capture final state and audit status
+        Summary-->>Refresh: RunSummaryData and RefreshResult
+        opt summary output enabled
+            Refresh->>Summary: render terminal and optional summary file
+        end
+
+        alt a phase throws
+            Refresh->>Files: restore original lock, workspace YAML, and scoped manifests
+            Files-->>Refresh: retain explicit pnpm approve-builds decisions
+            Refresh-->>CLI: rethrow original failure with recovery guidance
+        end
+    end
 ```
+
+Failure recovery restores the lockfile, workspace YAML, and in-scope package
+manifests. It retains build-script decisions recorded through the interactive
+`pnpm approve-builds` flow. `node_modules` is not restored; the failure message
+asks the user to run `pnpm install` before resuming work.

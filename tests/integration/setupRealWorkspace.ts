@@ -29,6 +29,15 @@ export function expectedPnpmMajor(): number | null {
  * skipped with a clear message).
  */
 export function detectPnpmMajor(): number | null {
+  const version = detectPnpmVersion();
+  if (!version) return null;
+  const m = /^v?(\d+)\./.exec(version);
+  if (!m) return null;
+  const n = Number.parseInt(m[1]!, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function detectPnpmVersion(): string | null {
   const result = spawnSync('pnpm', ['--version'], {
     // Keep repository-level packageManager/Corepack pins from masking the
     // version installed by the integration matrix.
@@ -37,10 +46,8 @@ export function detectPnpmMajor(): number | null {
     shell: process.platform === 'win32',
   });
   if (result.status !== 0) return null;
-  const m = /^v?(\d+)\./.exec(result.stdout.trim());
-  if (!m) return null;
-  const n = Number.parseInt(m[1]!, 10);
-  return Number.isFinite(n) ? n : null;
+  const version = result.stdout.trim().replace(/^v/u, '');
+  return /^\d+\.\d+\.\d+/.test(version) ? version : null;
 }
 
 export interface RealWorkspace {

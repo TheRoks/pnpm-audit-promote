@@ -1,17 +1,37 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../logger';
-import type { WorkspaceState } from '../workspace';
+import type { WorkspacePaths } from '../workspace';
+import type { WorkspaceMutations } from '../workspace/mutations';
+import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
+import type { WorkspaceConfiguration } from '../workspace/configuration';
 import { resolveWorkspacePackageDirs } from '../workspace/packageScope';
-import { findWorkspaceFiles } from '../fsWalk';
-import { removeJsonProperty } from '../jsonEdit';
+import {
+  findWorkspacePackageManifests,
+  findPackageManifest,
+  readPackageManifest,
+  formatForPath,
+  removeManifestProperty,
+  ensureManifestNewline,
+} from '../workspace/packageManifest';
 import { collapseBlankLines } from '../workspaceYaml';
+
+interface OverrideCleanupWorkspace {
+  paths: WorkspacePaths;
+  isMultiPackageWorkspace: boolean;
+  mutations: WorkspaceMutations;
+  yaml: WorkspaceYamlSnapshot;
+  configuration: Pick<WorkspaceConfiguration, 'readWorkspaceYaml' | 'getOwnerSnapshot'>;
+}
 
 /**
  * Strip the `overrides:` block from pnpm-workspace.yaml and store the desired
  * content in `state.yaml.desiredWorkspaceYaml`.
  */
-export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Logger): void {
+export function removeWorkspaceOverridesBlock(
+  state: Pick<OverrideCleanupWorkspace, 'yaml' | 'configuration'>,
+  logger: Logger,
+): void {
   logger.step("Remove workspace 'overrides:' block");
 
   if (!state.yaml.hasWorkspaceYaml) {
@@ -19,7 +39,15 @@ export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Log
     return;
   }
 
-  const original = state.yaml.readWorkspaceYaml();
+  const owner = state.configuration.getOwnerSnapshot('overrides');
+  if (!owner) {
+    logger.detail(
+      "Workspace 'overrides' are owned by a read-only config dependency; skipping cleanup.",
+    );
+    return;
+  }
+
+  const original = owner.readWorkspaceYaml();
   // Match the overrides block and any blank line that immediately follows it,
   // so removal does not leave a stray blank line behind.
   const pattern = /^overrides:[ \t]*\r?\n(?:[ \t]+\S.*\r?\n?)*(?:\r?\n)?/m;
@@ -28,14 +56,14 @@ export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Log
   if (pattern.test(original)) {
     desired = original.replace(pattern, '');
     desired = collapseBlankLines(desired);
-    desired = desired.replace(/[\r\n]+$/, '') + state.yaml.yamlEol;
-    logger.detail("Removed 'overrides:' block from pnpm-workspace.yaml.");
+    desired = desired.replace(/[\r\n]+$/, '') + owner.yamlEol;
+    logger.detail(`Removed 'overrides:' block from ${path.basename(owner.path)}.`);
   } else {
     desired = original;
-    logger.detail("No 'overrides:' block found in pnpm-workspace.yaml.");
+    logger.detail(`No 'overrides:' block found in ${path.basename(owner.path)}.`);
   }
 
-  state.yaml.writeDesiredWorkspaceYaml(desired);
+  owner.writeDesiredWorkspaceYaml(desired);
 }
 
 /**
@@ -44,39 +72,36 @@ export function removeWorkspaceOverridesBlock(state: WorkspaceState, logger: Log
  * transitive-only overrides will be re-added by `pnpm audit --fix` later, and
  * any catalog-eligible ones are then promoted into the catalog.
  */
-export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger): void {
+export function removePackageJsonOverrides(state: OverrideCleanupWorkspace, logger: Logger): void {
   logger.step("Remove 'pnpm.overrides' from package.json files");
 
-  let packageJsons: string[];
+  let manifests: string[];
   if (state.isMultiPackageWorkspace) {
-    const packageDirs = resolveWorkspacePackageDirs(state);
-    packageJsons = findWorkspaceFiles(state.workspaceRoot, 'package.json').filter(
-      (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
+    const packageDirs = resolveWorkspacePackageDirs({
+      paths: state.paths,
+      yaml: state.configuration,
+    });
+    manifests = findWorkspacePackageManifests(state.paths.workspaceRoot, packageDirs).map(
+      (manifest) => manifest.path,
     );
   } else {
-    // Single-package mode: only the root package.json. The mode banner is
-    // emitted once in `prepareRun`; `WorkspaceState.initialize` already
-    // guarantees the root package.json exists in this branch.
-    packageJsons = [state.rootPackageJson];
+    // Single-package mode is confined to the effective root manifest.
+    const manifest = findPackageManifest(state.paths.workspaceRoot);
+    manifests = manifest ? [manifest.path] : [];
   }
 
-  for (const pjPath of packageJsons) {
+  for (const pjPath of manifests) {
     let text: string;
     try {
       text = fs.readFileSync(pjPath, 'utf8');
     } catch {
       continue;
     }
-    if (!text.includes('"overrides"')) continue;
-
     const original = text;
-
-    // Surgically remove `pnpm.overrides` (and an empty `pnpm` parent if it
-    // becomes vacant) using jsonc-parser. This preserves whitespace,
-    // property order, and trailing newline byte-for-byte.
+    const format = formatForPath(pjPath);
     let parsed: { pnpm?: { overrides?: unknown } } | null;
     try {
-      parsed = JSON.parse(text) as { pnpm?: { overrides?: unknown } };
+      parsed = readPackageManifest(text, format) as { pnpm?: { overrides?: unknown } };
     } catch (e) {
       logger.warn(`Skipped ${pjPath}: pre-edit JSON was invalid (${(e as Error).message}).`);
       continue;
@@ -85,17 +110,17 @@ export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger
       continue;
     }
 
-    text = removeJsonProperty(text, 'pnpm', 'overrides');
+    text = removeManifestProperty(text, format, 'pnpm', 'overrides');
 
     // If the pnpm block is now empty (no remaining keys), drop it too.
     try {
-      const reparsed = JSON.parse(text) as { pnpm?: Record<string, unknown> };
+      const reparsed = readPackageManifest(text, format) as { pnpm?: Record<string, unknown> };
       if (
         reparsed.pnpm &&
         typeof reparsed.pnpm === 'object' &&
         Object.keys(reparsed.pnpm).length === 0
       ) {
-        text = removeJsonProperty(text, 'pnpm');
+        text = removeManifestProperty(text, format, 'pnpm');
       }
     } catch (e) {
       logger.warn(`Skipped ${pjPath}: post-edit JSON was invalid (${(e as Error).message}).`);
@@ -105,19 +130,16 @@ export function removePackageJsonOverrides(state: WorkspaceState, logger: Logger
     if (text === original) continue;
 
     try {
-      JSON.parse(text);
+      readPackageManifest(text, format);
     } catch (e) {
       logger.warn(`Skipped ${pjPath}: post-edit JSON was invalid (${(e as Error).message}).`);
       continue;
     }
 
     // Normalize trailing whitespace to exactly one newline.
-    const eol = text.includes('\r\n') ? '\r\n' : '\n';
-    text = text.replace(/[\s]+$/, '') + eol;
-    if (!state.yaml.dryRun) {
-      fs.writeFileSync(pjPath, text, { encoding: 'utf8' });
-    }
-    const rel = path.relative(state.workspaceRoot, pjPath);
+    text = ensureManifestNewline(text);
+    state.mutations.writeTextFile(pjPath, text);
+    const rel = path.relative(state.paths.workspaceRoot, pjPath);
     logger.detail(
       `${state.yaml.dryRun ? 'Dry-run: would remove' : 'Removed'} pnpm.overrides from ${rel}.`,
     );

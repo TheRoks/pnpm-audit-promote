@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EnclosingWorkspaceError, WorkspaceNotFoundError } from '../errors';
+import { findPackageManifest, readPackageManifest } from './packageManifest';
 
 export interface WorkspaceIdentity {
   workspaceRoot: string;
   lockFile: string;
   workspaceYaml: string;
   rootPackageJson: string;
+  rootPackageManifest: string | null;
   hasWorkspaceYaml: boolean;
   isMultiPackageWorkspace: boolean;
 }
@@ -19,8 +21,9 @@ export function discoverWorkspace(
   const workspaceYaml = path.join(workspaceRoot, 'pnpm-workspace.yaml');
   const lockFile = path.join(workspaceRoot, 'pnpm-lock.yaml');
   const rootPackageJson = path.join(workspaceRoot, 'package.json');
+  const rootManifest = findPackageManifest(workspaceRoot);
   const hasWorkspaceYaml = fs.existsSync(workspaceYaml);
-  const rootPackage = readJsonFile(rootPackageJson);
+  const rootPackage = readManifestFile(rootManifest);
 
   if (!hasWorkspaceYaml && !hasPnpmSignal(rootPackage, lockFile)) {
     throw new WorkspaceNotFoundError(workspaceRoot);
@@ -35,6 +38,7 @@ export function discoverWorkspace(
     lockFile,
     workspaceYaml,
     rootPackageJson,
+    rootPackageManifest: rootManifest?.path ?? null,
     hasWorkspaceYaml,
     isMultiPackageWorkspace: hasWorkspaceYaml || hasRootWorkspacesField(rootPackage),
   };
@@ -94,9 +98,10 @@ function hasRootWorkspacesField(rootPkg: unknown): boolean {
  * Read and parse a JSON file. Returns `null` on any read or parse failure
  * so callers can treat it as "absent or unreadable" without try/catch noise.
  */
-function readJsonFile(filePath: string): unknown {
+function readManifestFile(manifest: ReturnType<typeof findPackageManifest>): unknown {
+  if (!manifest) return null;
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return readPackageManifest(fs.readFileSync(manifest.path, 'utf8'), manifest.format);
   } catch {
     return null;
   }

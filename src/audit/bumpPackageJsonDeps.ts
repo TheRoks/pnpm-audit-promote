@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import semver from 'semver';
 import type { Logger } from '../logger';
 import type { PnpmCaptureRunner } from '../pnpm';
@@ -7,9 +6,16 @@ import {
   resolveWorkspacePackageDirs,
   type WorkspacePackageScopeSource,
 } from '../workspace/packageScope';
-import { findWorkspaceFiles } from '../fsWalk';
-import { setJsonProperty } from '../jsonEdit';
+import {
+  findPackageManifest,
+  findWorkspacePackageManifests,
+  formatForPath,
+  readPackageManifest,
+  setManifestProperty,
+} from '../workspace/packageManifest';
+import type { WorkspaceConfiguration } from '../workspace/configuration';
 import { selectSafeBump, type BumpTier, normalizeRange } from '../semverUtil';
+import type { WorkspaceMutations } from '../workspace/mutations';
 import { advisoryAppliesToCurrent, advisoryMatchesIgnoreList } from './parseAdvisories';
 import { parsePnpmAuditOutput, type PnpmAuditParseResult, type PnpmAuditOutput } from './pnpmAudit';
 import { getAvailableVersions } from './registry';
@@ -17,6 +23,7 @@ export type { PnpmAuditAdvisory, PnpmAuditOutput } from './pnpmAudit';
 
 interface PackageJsonBumpWorkspace extends WorkspacePackageScopeSource {
   isMultiPackageWorkspace: boolean;
+  configuration?: Pick<WorkspaceConfiguration, 'readWorkspaceYaml'>;
 }
 
 /** Dep field types that can hold concrete package versions. */
@@ -275,7 +282,10 @@ export async function getDirectDepPackageJsonBumps(
  * file and applies them all in one read-modify-write pass. No-ops when
  * `dryRun` is true.
  */
-export function applyPackageJsonDepBumps(bumps: PackageJsonDepBump[], dryRun: boolean): void {
+export function applyPackageJsonDepBumps(
+  bumps: PackageJsonDepBump[],
+  mutations: WorkspaceMutations,
+): void {
   // Group by file.
   const byFile = new Map<string, PackageJsonDepBump[]>();
   for (const bump of bumps) {
@@ -295,11 +305,15 @@ export function applyPackageJsonDepBumps(bumps: PackageJsonDepBump[], dryRun: bo
       continue;
     }
     for (const bump of fileBumps) {
-      text = setJsonProperty(text, bump.after, bump.depType, bump.name);
+      text = setManifestProperty(
+        text,
+        formatForPath(pkgJsonPath),
+        bump.after,
+        bump.depType,
+        bump.name,
+      );
     }
-    if (!dryRun) {
-      fs.writeFileSync(pkgJsonPath, text, 'utf8');
-    }
+    mutations.writeTextFile(pkgJsonPath, text);
   }
 }
 
@@ -312,11 +326,15 @@ function collectPackageJsonPaths(workspace: PackageJsonBumpWorkspace): string[] 
     // Single-package mode: confine the audit-driven scan to the workspace
     // root. `WorkspaceState.initialize` guarantees the root package.json
     // exists when we get here.
-    return [workspace.rootPackageJson];
+    const manifest = findPackageManifest(workspace.paths.workspaceRoot);
+    return manifest ? [manifest.path] : [];
   }
-  const packageDirs = resolveWorkspacePackageDirs(workspace);
-  return findWorkspaceFiles(workspace.workspaceRoot, 'package.json').filter(
-    (pjPath) => packageDirs === null || packageDirs.has(path.dirname(pjPath)),
+  const packageDirs = resolveWorkspacePackageDirs({
+    paths: workspace.paths,
+    yaml: workspace.configuration ?? workspace.yaml,
+  });
+  return findWorkspacePackageManifests(workspace.paths.workspaceRoot, packageDirs).map(
+    (manifest) => manifest.path,
   );
 }
 
@@ -332,7 +350,7 @@ function buildDepIndex(pkgJsonPaths: string[]): Map<string, DirectDependencyLoca
     }
     let pkg: Record<string, unknown>;
     try {
-      pkg = JSON.parse(raw) as Record<string, unknown>;
+      pkg = readPackageManifest(raw, formatForPath(pkgJsonPath)) as Record<string, unknown>;
     } catch {
       continue;
     }

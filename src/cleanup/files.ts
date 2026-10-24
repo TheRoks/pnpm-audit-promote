@@ -2,34 +2,27 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Logger } from '../logger';
-import type { WorkspaceState } from '../workspace';
+import type { WorkspacePaths } from '../workspace';
+import type { WorkspaceMutations } from '../workspace/mutations';
+import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
 import { findNodeModulesFolders } from '../fsWalk';
 
-/**
- * Defense-in-depth: refuse to delete any path that does not resolve under the
- * workspace root. Guards against accidental misuse of the cleanup helpers
- * with externally-supplied paths.
- */
-function assertWithinWorkspace(state: WorkspaceState, target: string): void {
-  const resolved = path.resolve(target);
-  const root = path.resolve(state.workspaceRoot);
-  const rel = path.relative(root, resolved);
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error(
-      `Refusing to delete '${resolved}': path is not contained within workspace root '${root}'.`,
-    );
-  }
+interface FileCleanupWorkspace {
+  paths: WorkspacePaths;
+  isMultiPackageWorkspace: boolean;
+  mutations: WorkspaceMutations;
+  yaml: Pick<WorkspaceYamlSnapshot, 'dryRun'>;
 }
 
-export function removePnpmLockFile(state: WorkspaceState, logger: Logger): void {
+export function removePnpmLockFile(state: FileCleanupWorkspace, logger: Logger): void {
   logger.step('Remove pnpm lockfile');
-  if (fs.existsSync(state.lockFile)) {
-    assertWithinWorkspace(state, state.lockFile);
+  if (fs.existsSync(state.paths.lockFile)) {
     if (state.yaml.dryRun) {
-      logger.detail(`Dry-run: would remove ${state.lockFile}`);
+      logger.detail(`Dry-run: would remove ${state.paths.lockFile}`);
     } else {
-      fs.rmSync(state.lockFile, { force: true });
-      logger.detail(`Removed ${state.lockFile}.`);
+      if (state.mutations.removeFileSync(state.paths.lockFile)) {
+        logger.detail(`Removed ${state.paths.lockFile}.`);
+      }
     }
   } else {
     logger.detail('No pnpm-lock.yaml found.');
@@ -37,17 +30,17 @@ export function removePnpmLockFile(state: WorkspaceState, logger: Logger): void 
 }
 
 export async function removeNodeModulesFolders(
-  state: WorkspaceState,
+  state: FileCleanupWorkspace,
   logger: Logger,
 ): Promise<void> {
   logger.step('Remove node_modules directories');
   let dirs: string[];
   if (state.isMultiPackageWorkspace) {
-    dirs = findNodeModulesFolders(state.workspaceRoot);
+    dirs = findNodeModulesFolders(state.paths.workspaceRoot);
   } else {
     // Single-package mode: only the workspace root's own node_modules is
     // eligible. The mode banner is emitted once in `prepareRun`.
-    const rootNodeModules = path.join(state.workspaceRoot, 'node_modules');
+    const rootNodeModules = path.join(state.paths.workspaceRoot, 'node_modules');
     dirs = fs.existsSync(rootNodeModules) ? [rootNodeModules] : [];
   }
   if (dirs.length === 0) {
@@ -68,20 +61,19 @@ export async function removeNodeModulesFolders(
       logger.detail(`Dry-run: would remove ${dir}`);
       continue;
     }
-    assertWithinWorkspace(state, dir);
     processedCount += 1;
     spinner.update(processedCount);
-    // On Windows, `rd /s /q` is dramatically faster than recursive rm for
-    // deep node_modules trees; on macOS/Linux fall through to fs.promises.rm.
-    if (process.platform === 'win32') {
-      await spawnAsync('cmd', ['/c', 'rd', '/s', '/q', dir]);
-    }
-    if (await pathExists(dir)) {
-      try {
-        await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-      } catch {
-        // fall through to warning
-      }
+    try {
+      // On Windows, `rd /s /q` is dramatically faster than recursive rm for
+      // deep node_modules trees; WorkspaceMutations validates the path first
+      // and falls back to fs.promises.rm if the command leaves files behind.
+      await state.mutations.removeDirectory(dir, async (resolved) => {
+        if (process.platform === 'win32') {
+          await spawnAsync('cmd', ['/c', 'rd', '/s', '/q', resolved]);
+        }
+      });
+    } catch {
+      // Fall through to the existing warning when removal cannot complete.
     }
     if (await pathExists(dir)) {
       logger.warn(`Could not fully remove ${dir} (possibly locked by another process).`);

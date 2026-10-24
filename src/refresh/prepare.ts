@@ -35,14 +35,14 @@ export async function prepareRun(options: RefreshOptions): Promise<PreparedRun> 
   const pnpm =
     options.pnpm ??
     createPnpmRunner({
-      cwd: state.workspaceRoot,
+      cwd: state.paths.workspaceRoot,
       logger,
       inheritOutput: logger.isVerbose(),
       dryRun,
       extraArgs: ignoreWorkspace ? ['--ignore-workspace'] : [],
     });
 
-  logger.info(`Workspace root: ${state.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
+  logger.info(`Workspace root: ${state.paths.workspaceRoot}${dryRun ? ' (dry-run)' : ''}`);
   if (ignoreWorkspace) {
     logger.info('Ignoring any enclosing pnpm workspace (--ignore-workspace).');
   }
@@ -61,32 +61,38 @@ export async function prepareRun(options: RefreshOptions): Promise<PreparedRun> 
   // that will actually execute commands inside `--path`. Corepack (and any
   // wrapper that respects `packageManager` / `devEngines.packageManager`)
   // selects the target's pin instead. We mirror that: read the workspace
-  // package.json first and only fall back to `pnpm --version` when no pin
-  // is declared. Failures degrade gracefully — `pnpmMajor` stays `null`,
-  // which downstream code treats as legacy pnpm 10 behavior.
+  // package.json first. If the pin declares only a major (for example, a
+  // semver range), resolve the exact target version through the runner when
+  // its reported major agrees with the workspace pin. Failures degrade
+  // gracefully — the run keeps the best-known capability profile.
   let major: number | null = null;
   let version: string | null = null;
   let source = 'unknown';
   try {
-    const pin = readWorkspacePnpmPin(state.rootPackageJson);
+    const pin = readWorkspacePnpmPin(
+      state.paths.rootPackageManifest ?? state.paths.rootPackageJson,
+    );
     major = pin.major;
     version = pin.version;
     if (major !== null) source = 'workspace package.json';
   } catch {
     // ignore — fall through to PATH lookup
   }
-  if (major === null) {
+  if (major === null || version === null) {
     try {
       const versionText = await pnpm.version();
-      major = getPnpmMajor(versionText);
-      version = versionText || null;
-      source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
+      const resolvedMajor = getPnpmMajor(versionText);
+      if (major === null || resolvedMajor === major) {
+        major = resolvedMajor;
+        version = versionText || null;
+        source = versionText ? `pnpm --version (${versionText})` : 'pnpm --version';
+      }
     } catch {
-      // leave major as null
+      // Keep the detected workspace-pin major and its fallback profile.
     }
   }
-  state.recordPnpmMajor(major);
-  state.recordPnpmVersion(version);
+  state.recordPnpm(major, version);
+  state.configuration.initialize(state.pnpmCapabilities);
   logger.detail(`Target workspace pnpm major: ${major ?? 'unknown'} (from ${source}).`);
 
   const auditFixMode = options.auditFixMode ?? 'override';
@@ -95,7 +101,7 @@ export async function prepareRun(options: RefreshOptions): Promise<PreparedRun> 
       `Invalid audit fix mode '${String(auditFixMode)}'; expected 'override' or 'update'.`,
     );
   }
-  if (!skipAudit && auditFixMode === 'update' && (major === null || major < 11)) {
+  if (!skipAudit && auditFixMode === 'update' && !state.pnpmCapabilities.supportsAuditUpdate) {
     throw new Error('The audit fix mode "update" requires a detectable pnpm 11 or newer target.');
   }
 

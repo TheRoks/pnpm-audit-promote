@@ -2,10 +2,12 @@ import * as fs from 'node:fs';
 import type { Logger } from '../logger';
 import type { WorkspaceYamlSnapshot } from '../workspace/yamlSnapshot';
 import { reportPromotions } from './bumpReporting';
-import { planPackageJsonOverridesIntoCatalog } from './packageJsonOverridePromotionPolicy';
+import { planPackageManifestOverridesIntoCatalog } from './packageJsonOverridePromotionPolicy';
+import { formatForPath } from '../workspace/packageManifest';
 
 export {
   planPackageJsonOverridesIntoCatalog,
+  planPackageManifestOverridesIntoCatalog,
   type PackageJsonOverridePromotionPlan,
 } from './packageJsonOverridePromotionPolicy';
 
@@ -13,6 +15,7 @@ export {
 export interface PackageJsonOverrideWorkspace {
   rootPackageJson: string;
   yaml: WorkspaceYamlSnapshot;
+  updateCatalogs?: (updates: ReadonlyMap<string, string>) => void;
 }
 
 export function syncPackageJsonOverridesIntoCatalog(
@@ -23,7 +26,11 @@ export function syncPackageJsonOverridesIntoCatalog(
   if (!fs.existsSync(workspace.rootPackageJson)) return desiredYaml;
 
   const packageJsonText = fs.readFileSync(workspace.rootPackageJson, 'utf8');
-  const plan = planPackageJsonOverridesIntoCatalog(packageJsonText, desiredYaml);
+  const plan = planPackageManifestOverridesIntoCatalog(
+    packageJsonText,
+    formatForPath(workspace.rootPackageJson),
+    desiredYaml,
+  );
   if (!plan.changed) {
     for (const diagnostic of plan.diagnostics) logger.detail(diagnostic);
     return desiredYaml;
@@ -36,11 +43,12 @@ export function syncPackageJsonOverridesIntoCatalog(
       'Promoting direct-dependency audit fixes from package.json into the catalog:',
       logger,
     );
-    workspace.yaml.writeDesiredWorkspaceYaml(plan.yaml);
+    if (workspace.updateCatalogs) workspace.updateCatalogs(plan.promotions);
+    else workspace.yaml.writeDesiredWorkspaceYaml(plan.yaml);
   }
   for (const diagnostic of plan.diagnostics) logger.detail(diagnostic);
-  if (!workspace.yaml.dryRun && plan.packageJsonText !== packageJsonText) {
-    fs.writeFileSync(workspace.rootPackageJson, plan.packageJsonText, 'utf8');
+  if (plan.packageJsonText !== packageJsonText) {
+    workspace.yaml.mutations.writeTextFile(workspace.rootPackageJson, plan.packageJsonText);
   }
   return plan.yaml;
 }

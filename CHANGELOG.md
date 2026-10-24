@@ -10,6 +10,13 @@
 - Add opt-in `auditFixMode: 'update'` / `--audit-fix-mode update` for pnpm 11+.
 - Exercise pnpm 12 in real-pnpm integration coverage, including macOS and Windows.
 
+## [1.11.0](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.3...v1.11.0) (2026-10-24)
+
+
+### Features
+
+* **pnpm12:** support delegated config and package manifests ([#131](https://github.com/TheRoks/pnpm-audit-promote/issues/131)) ([1897868](https://github.com/TheRoks/pnpm-audit-promote/commit/18978684be5a4f52e7c9a96c1e0de4365d8676ab))
+
 ## [1.10.3](https://github.com/TheRoks/pnpm-audit-promote/compare/v1.10.2...v1.10.3) (2026-10-12)
 
 
